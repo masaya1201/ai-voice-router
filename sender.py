@@ -674,6 +674,19 @@ class Prepared:
         self.error = error          # SendResult（失敗時）
 
 
+def prepare_target_threadsafe(target):
+    """別スレッドから準備するとき用。
+    UI Automation はスレッドごとに初期化が必要で、忘れると
+    「Can not load UIAutomationCore.dll」となり入力欄を特定できないまま進んでしまう。"""
+    try:
+        with auto.UIAutomationInitializerInThread():
+            return prepare_target(target)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return Prepared(target)
+
+
 def prepare_target(target):
     """送信先を開いて入力欄にフォーカスするところまでを行う（文字は入れない）。"""
     label = target.get("label", "?")

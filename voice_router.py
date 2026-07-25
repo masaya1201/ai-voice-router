@@ -48,6 +48,11 @@ import sender
 # ============================================================
 # 設定
 # ============================================================
+# 音声認識エンジン
+#   "vosk"    : 話している最中に認識するため、離した瞬間に送信される（推奨）
+#   "whisper" : 精度は少し高いが、離してから数秒待つ（CPUのみの場合）
+ENGINE = "vosk"
+
 MODEL_SIZE = "small"   # base(速いが日本語精度が落ちる) / small(推奨) / medium(高精度・重い)
 # 言語を固定すると判定処理が省けて大幅に速い。None=自動判定(遅い)
 LANGUAGE = "ja"
@@ -70,6 +75,7 @@ HOTKEY_SWALLOW = True
 #   {"key":"pplx","label":"Perplexity","color":"#20808d","kind":"edge_tab","tab":"perplexity"},
 # ============================================================
 DEFAULT_CONFIG = {
+    "engine": ENGINE,
     "model_size": MODEL_SIZE,
     "language": LANGUAGE,
     "cpu_threads": CPU_THREADS,
@@ -131,6 +137,7 @@ def load_config():
 
 
 CONFIG = load_config()
+ENGINE = (CONFIG.get("engine") or ENGINE).lower()
 MODEL_SIZE = CONFIG.get("model_size", MODEL_SIZE)
 LANGUAGE = CONFIG.get("language", LANGUAGE)
 CPU_THREADS = CONFIG.get("cpu_threads", CPU_THREADS)
@@ -161,10 +168,18 @@ class Api:
         self.frames = []
         self.stream = None
         self.app_stt = None     # アプリ自身の音声入力を使用中の状態
+        self.vosk = None        # 逐次認識エンジン（ENGINE="vosk" のとき）
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self):
         try:
+            if ENGINE == "vosk":
+                from vosk_stt import VoskEngine
+                self.vosk = VoskEngine(lang=(LANGUAGE or "ja"),
+                                       model_path=CONFIG.get("vosk_model_path"))
+                self.model = self.vosk        # 準備完了の目印として共用
+                return
+            from faster_whisper import WhisperModel
             m = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8",
                              cpu_threads=CPU_THREADS)
             # 初回だけ極端に遅くならないよう、空音声で一度動かして温めておく
@@ -260,6 +275,8 @@ class Api:
         self.recording = True
         self.frames = []
         try:
+            if ENGINE == "vosk":
+                self.vosk.start()          # 話している間に逐次認識させる
             self.stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                                          dtype="float32", callback=self._cb)
             self.stream.start()
@@ -269,7 +286,11 @@ class Api:
             return {"error": str(e)}
 
     def _cb(self, indata, frames, t, status):
-        if self.recording:
+        if not self.recording:
+            return
+        if ENGINE == "vosk":
+            self.vosk.feed(indata)         # 重い処理はエンジン側のワーカーが行う
+        else:
             self.frames.append(indata.copy())
 
     # ---------- 認識 + 送信 ----------
@@ -294,13 +315,34 @@ class Api:
         except Exception:
             pass
 
+        target = TARGETS[key]
+
+        # --- Vosk: 認識は録音中に終わっているので、ここでは結果を受け取るだけ ---
+        if ENGINE == "vosk":
+            prep_box = {}
+            th = threading.Thread(
+                target=lambda: prep_box.update(p=sender.prepare_target_threadsafe(target)),
+                daemon=True)
+            th.start()
+            text = self.vosk.stop()
+            th.join(8.0)
+            if not text:
+                return {"ok": False, "msg": "（認識なし）"}
+            try:
+                res = sender.send_text(target, text, press_enter=True, verify=True,
+                                       prepared=prep_box.get("p"))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return {"ok": False, "text": text, "msg": f"送信エラー: {e}"}
+            return {"ok": res.ok, "text": text, "name": target["label"],
+                    "msg": res.msg, "detail": res.detail}
+
         if not self.frames:
             return {"ok": False, "msg": "（無音）"}
         audio = np.concatenate(self.frames, axis=0).flatten()
         if len(audio) < SAMPLE_RATE * 0.3:
             return {"ok": False, "msg": "（短すぎ）"}
-
-        target = TARGETS[key]
 
         # 送信先の準備（ウィンドウ/タブ切替・入力欄フォーカス）は音声認識と並行して行う。
         # 直列にすると認識が終わってから数秒待つことになるため。
@@ -308,7 +350,7 @@ class Api:
 
         def _prepare():
             try:
-                prep_box["p"] = sender.prepare_target(target)
+                prep_box["p"] = sender.prepare_target_threadsafe(target)
             except Exception:
                 import traceback
                 traceback.print_exc()
