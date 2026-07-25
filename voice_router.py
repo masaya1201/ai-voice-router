@@ -44,6 +44,7 @@ from faster_whisper import WhisperModel
 
 import hotkeys
 import sender
+from punctuate import punctuate
 
 # ============================================================
 # 設定
@@ -52,6 +53,9 @@ import sender
 #   "vosk"    : 話している最中に認識するため、離した瞬間に送信される（推奨）
 #   "whisper" : 精度は少し高いが、離してから数秒待つ（CPUのみの場合）
 ENGINE = "vosk"
+
+# 認識結果に句点(。)を補う。Voskは句読点を出さないため。
+PUNCTUATE = True
 
 MODEL_SIZE = "small"   # base(速いが日本語精度が落ちる) / small(推奨) / medium(高精度・重い)
 # 言語を固定すると判定処理が省けて大幅に速い。None=自動判定(遅い)
@@ -76,6 +80,7 @@ HOTKEY_SWALLOW = True
 # ============================================================
 DEFAULT_CONFIG = {
     "engine": ENGINE,
+    "punctuate": PUNCTUATE,
     # Voskのモデル。未指定なら小さい既定モデル(48MB)。
     # "vosk-model-ja-0.22" にすると大きい高精度モデル(約1.5GB・初回に自動取得)
     "vosk_model_name": None,
@@ -96,15 +101,6 @@ DEFAULT_CONFIG = {
         {"key": "gemini", "label": "Gemini", "color": "#8e6fd8",
          "kind": "browser_tab", "browser": "edge",
          "tab": "gemini", "url": "gemini.google.com"},
-        # stt="app": 音声の書き起こしをアプリ自身(クラウド)に任せる。
-        # ローカル認識を使わないため待ち時間がほぼ無く、CPUも使わない。
-        {"key": "chatgpt_fast", "label": "ChatGPT 高速", "color": "#0b6e58",
-         "kind": "browser_tab", "browser": "edge",
-         "tab": "chatgpt", "url": "chatgpt.com",
-         "stt": "app",
-         "stt_start": ["音声入力を開始", "Start dictation"],
-         "stt_submit": ["音声入力を送信", "Submit dictation"],
-         "stt_cancel": ["音声入力をキャンセル", "Cancel dictation"]},
         # kind="click" は録音せず、アプリ内のボタンを押すだけの宛先。
         # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
         {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
@@ -141,6 +137,7 @@ def load_config():
 
 CONFIG = load_config()
 ENGINE = (CONFIG.get("engine") or ENGINE).lower()
+PUNCTUATE = CONFIG.get("punctuate", PUNCTUATE)
 MODEL_SIZE = CONFIG.get("model_size", MODEL_SIZE)
 LANGUAGE = CONFIG.get("language", LANGUAGE)
 CPU_THREADS = CONFIG.get("cpu_threads", CPU_THREADS)
@@ -328,7 +325,7 @@ class Api:
                 target=lambda: prep_box.update(p=sender.prepare_target_threadsafe(target)),
                 daemon=True)
             th.start()
-            text = self.vosk.stop()
+            text = punctuate(self.vosk.stop()) if PUNCTUATE else self.vosk.stop()
             th.join(8.0)
             if not text:
                 return {"ok": False, "msg": "（認識なし）"}
@@ -365,6 +362,8 @@ class Api:
         try:
             segs, _info = self.model.transcribe(audio, **TRANSCRIBE_OPTS)
             text = "".join(s.text for s in segs).strip()
+            if PUNCTUATE:
+                text = punctuate(text)
         except Exception as e:
             return {"ok": False, "msg": f"認識失敗: {e}"}
 
