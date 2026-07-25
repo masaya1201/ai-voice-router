@@ -76,6 +76,9 @@ HOTKEY_SWALLOW = True
 # ============================================================
 DEFAULT_CONFIG = {
     "engine": ENGINE,
+    # Voskのモデル。未指定なら小さい既定モデル(48MB)。
+    # "vosk-model-ja-0.22" にすると大きい高精度モデル(約1.5GB・初回に自動取得)
+    "vosk_model_name": None,
     "model_size": MODEL_SIZE,
     "language": LANGUAGE,
     "cpu_threads": CPU_THREADS,
@@ -176,7 +179,8 @@ class Api:
             if ENGINE == "vosk":
                 from vosk_stt import VoskEngine
                 self.vosk = VoskEngine(lang=(LANGUAGE or "ja"),
-                                       model_path=CONFIG.get("vosk_model_path"))
+                                       model_path=CONFIG.get("vosk_model_path"),
+                                       model_name=CONFIG.get("vosk_model_name"))
                 self.model = self.vosk        # 準備完了の目印として共用
                 return
             from faster_whisper import WhisperModel

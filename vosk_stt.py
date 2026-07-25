@@ -26,11 +26,17 @@ SAMPLE_RATE = 16000
 class VoskEngine:
     """録音中に逐次認識し、停止時にただちに全文を返す。"""
 
-    def __init__(self, lang="ja", model_path=None):
+    def __init__(self, lang="ja", model_path=None, model_name=None):
         from vosk import Model, SetLogLevel
         SetLogLevel(-1)
-        # model_path があればそれを使う（オフライン配布・任意モデル用）
-        self.model = Model(model_path=model_path) if model_path else Model(lang=lang)
+        # model_path: 手元のフォルダを直接指定（オフライン配布用）
+        # model_name: 例 "vosk-model-ja-0.22"（大きい高精度モデル・約1.5GB）
+        if model_path:
+            self.model = Model(model_path=model_path)
+        elif model_name:
+            self.model = Model(model_name=model_name)
+        else:
+            self.model = Model(lang=lang)
         self._rec = None
         self._q = None
         self._worker = None
