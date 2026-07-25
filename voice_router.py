@@ -61,6 +61,9 @@ MODEL_SIZE = "small"   # base(速いが日本語精度が落ちる) / small(推�
 # 言語を固定すると判定処理が省けて大幅に速い。None=自動判定(遅い)
 LANGUAGE = "ja"
 SAMPLE_RATE = 16000
+# 使用するマイク。null=Windowsの既定。名前の一部（例 "ヘッドセット"）か番号で指定できる。
+# 内蔵マイクはスピーカーの音（動画や音楽）を拾うため、ヘッドセットの方が正確に認識できる。
+INPUT_DEVICE = None
 # CPUスレッド数。全コアを使うとかえって遅くなる（実測: 12スレッドは6スレッドの約2倍遅い）
 CPU_THREADS = 6
 
@@ -87,6 +90,7 @@ DEFAULT_CONFIG = {
     "model_size": MODEL_SIZE,
     "language": LANGUAGE,
     "cpu_threads": CPU_THREADS,
+    "input_device": INPUT_DEVICE,
     "hotkeys_enabled": HOTKEYS_ENABLED,
     "hotkey_swallow": HOTKEY_SWALLOW,
     "targets": [
@@ -141,6 +145,7 @@ PUNCTUATE = CONFIG.get("punctuate", PUNCTUATE)
 MODEL_SIZE = CONFIG.get("model_size", MODEL_SIZE)
 LANGUAGE = CONFIG.get("language", LANGUAGE)
 CPU_THREADS = CONFIG.get("cpu_threads", CPU_THREADS)
+INPUT_DEVICE = CONFIG.get("input_device", INPUT_DEVICE)
 HOTKEYS_ENABLED = CONFIG.get("hotkeys_enabled", HOTKEYS_ENABLED)
 HOTKEY_SWALLOW = CONFIG.get("hotkey_swallow", HOTKEY_SWALLOW)
 TARGET_LIST = CONFIG.get("targets", DEFAULT_CONFIG["targets"])
@@ -155,6 +160,27 @@ TRANSCRIBE_OPTS = dict(
     vad_filter=True,                # 無音を除いて処理量を減らす
     chunk_length=10,                # 既定30秒→10秒。短い発話でも30秒分処理するのを避ける
 )
+
+
+def resolve_input_device(spec):
+    """設定のマイク指定（番号 or 名前の一部）を実際のデバイス番号に変換する。
+    見つからなければ None（Windowsの既定マイク）を返す。"""
+    if spec is None or spec == "":
+        return None
+    try:
+        if isinstance(spec, int):
+            return spec
+        text = str(spec).strip()
+        if text.isdigit():
+            return int(text)
+        low = text.lower()
+        for i, d in enumerate(sd.query_devices()):
+            if d["max_input_channels"] > 0 and low in d["name"].lower():
+                return i
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    return None
 
 
 # ============================================================
@@ -279,7 +305,8 @@ class Api:
             if ENGINE == "vosk":
                 self.vosk.start()          # 話している間に逐次認識させる
             self.stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                                         dtype="float32", callback=self._cb)
+                                         dtype="float32", callback=self._cb,
+                                         device=resolve_input_device(INPUT_DEVICE))
             self.stream.start()
             return True
         except Exception as e:
