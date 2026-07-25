@@ -26,12 +26,27 @@ faster-whisper に切り替わります。句読点補正（punctuate.py）と
 ## セットアップ
 
 ```bash
-git clone https://github.com/tsuchitaka-star/ai-voice-router
+git clone https://github.com/masaya1201/ai-voice-router
 cd ai-voice-router
 ./VoiceRouter.command   # 初回は venv 構築 + 依存インストール + モデルDL（数分）
 ```
 
 2回目以降は Finder で `VoiceRouter.command` をダブルクリックするだけです。
+
+### アプリとして使いたいとき
+
+Windows版の `ショートカットを作成.bat` に当たるものが2つあります。
+
+| | 作られるもの | 時間 | アイコン・権限 |
+|---|---|---|---|
+| `ショートカットを作成.command` | `~/Applications/Voice Router.app`（この場所のコードを呼ぶだけの薄い殻） | 数秒 | Finderのアイコンは専用。**起動中のDockアイコンはPythonのもの**、権限も「Python」に付く |
+| `build_app.command` | `dist/Voice Router.app`（Python同梱の単体アプリ） | 数分 | すべて専用。**配布もできる** |
+
+手軽に済ませたいなら前者、ちゃんとしたアプリにしたいなら後者です。
+
+> Python は自分自身を `Python.app` として登録するため、薄い殻の .app から
+> 起動しても実行中はPythonのアプリとして扱われます。これはPyInstallerで
+> 固めた `build_app.command` の方でしか解消できません。
 
 ### 必要な権限（初回のみ）
 
@@ -99,8 +114,25 @@ Windows版と同じです。README.md を参照してください。
 - グローバルホットキー（pynput）は pywebview と同一プロセスで共存できないため、
   別プロセスのワーカーで監視しています（親終了時に自動終了）。
 
+## Windows版のファイルと macOS版の対応
+
+| Windows | macOS | 状態 |
+|---|---|---|
+| `VoiceRouter.bat` | `VoiceRouter.command` | ✅ |
+| `ショートカットを作成.bat` / `install_shortcut.ps1` | `ショートカットを作成.command` | ✅ |
+| `build_exe.bat` | `build_app.command` | ✅ |
+| `sender.py`（UI Automation） | `sender_mac.py`（AppleScript） | ✅ |
+| `hotkeys.py`（低レベルフック） | `hotkeys_mac.py`（Quartz・別プロセス） | ✅ |
+| `voice_router.ico` | `voice_router.icns`（.icoから自動生成） | ✅ |
+| `vosk_stt.py` / `punctuate.py` / `vocab.py` | 同じものがそのまま動く | ✅ |
+
 ## 制限事項（macOS版）
 
 - 入力欄の中身の読み返し検証はありません（前面化の検証のみ）
 - ブラウザ側でアドレスバー等にフォーカスがあると、まれに貼り付け先を誤ることがあります
+  （ブラウザのJavaScript実行を許可すると、貼る前に入力欄へフォーカスを移すので減ります）
 - Firefox は AppleScript でタブ操作ができないため未対応です
+- `stt: "app"`（送信先アプリ自身の書き起こしを使うモード）は、ブラウザのタブが対象で
+  JavaScript実行を許可している場合のみ動きます。デスクトップアプリでは入力欄の中身を
+  読めないため使えません
+- MacBook 本体にはテンキーがないため、外付けキーボードが無ければ画面のボタンを使います

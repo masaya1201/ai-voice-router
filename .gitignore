@@ -16,3 +16,11 @@ docs/_*.png
 
 # 専門用語・固有名詞の対応表（個人情報を含むため公開しない）
 vocabulary.json
+
+# macOS版のビルド成果物
+voice_router.icns
+Voice Router.app/
+*.spec
+
+.venv/
+voice_router_config.json.bak

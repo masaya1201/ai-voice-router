@@ -19,9 +19,19 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 # 警告出力で読込スレッドがクラッシュする。ログファイルへ退避して回避。
 # 実行フォルダ（.exe化した場合も設定/ログを実行ファイルの隣に置く）
 if getattr(sys, "frozen", False):
-    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    if sys.platform == "darwin":
+        # macOS の .app は中身が読み取り専用扱い（署名の対象）なので、
+        # 設定とログはユーザーのアプリケーションサポートに置く。
+        APP_DIR = os.path.expanduser(
+            "~/Library/Application Support/VoiceRouter")
+        os.makedirs(APP_DIR, exist_ok=True)
+    else:
+        APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# アイコンなど同梱リソースの場所（PyInstaller は _MEIPASS に展開する）
+RES_DIR = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
 
 _LOG_PATH = os.path.join(APP_DIR, "voice_router.log")
 try:
@@ -752,6 +762,8 @@ def ui_pump(api, window, q):
     sent_targets = False
     sent_ready = False
     sent_error = None
+    if IS_MAC:
+        set_dock_icon()     # pywebview 起動後でないとアイコンが戻される
     while True:
         time.sleep(0.08)
         try:
@@ -778,6 +790,33 @@ def ui_pump(api, window, q):
                         q.put((a[0], a[1]))
         except Exception:
             return          # ウィンドウが閉じられた等
+
+
+def set_dock_icon():
+    """macOS: Dock とアプリ切替(Cmd+Tab)のアイコンを Voice Router のものにする。
+    Python は自身を Python.app として登録するため、.app から起動しても
+    そのままでは Python のアイコンが出る。実行時に差し替えて回避する。
+
+    pywebview の起動時にアイコンが戻されるため、必ず webview.start() の
+    「後」に呼ぶこと。AppKit の描画はメインスレッドで行う必要があるので、
+    別スレッドから呼ばれても安全なようにメインスレッドへ渡す。
+
+    なお、ターミナルや .command から起動した場合は Python 自身のプロセスとして
+    登録されるため、これでも Python のアイコンのままになることがある。
+    アイコンまで含めて完全にするには build_app.command で .app を作る。"""
+    icns = os.path.join(RES_DIR, "voice_router.icns")
+    if not os.path.exists(icns):
+        return
+    try:
+        import AppKit
+        img = AppKit.NSImage.alloc().initWithContentsOfFile_(icns)
+        if img is None:
+            return
+        AppKit.NSApplication.sharedApplication() \
+            .performSelectorOnMainThread_withObject_waitUntilDone_(
+                "setApplicationIconImage:", img, False)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
