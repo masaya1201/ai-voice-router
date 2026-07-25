@@ -156,8 +156,8 @@ pip install -r requirements.txt
 |------|------|
 | `model_size` | `base`（速い） / `small`（標準） / `medium`（高精度・重い） |
 | `language` | `null`＝自動判定 / `"ja"`＝日本語固定（最速） / `"en"`＝英語固定 |
-| `hotkeys_enabled` | テンキー 1〜4 のショートカットを使うか |
-| `hotkey_swallow` | `true` の間はテンキー 1〜4 で数字が打てなくなります。数字入力も使いたい場合は `false` |
+| `hotkeys_enabled` | テンキーのショートカットを使うか |
+| `hotkey_swallow` | `true` の間は割り当て済みのテンキーで数字が打てなくなります。数字入力も使いたい場合は `false` |
 
 ---
 
