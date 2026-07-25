@@ -375,7 +375,7 @@ HTML = r"""
       if(!list){ return; }
       buildButtons(list);
       list.forEach((t,i)=>{
-        if(i<4){
+        if(i<9){
           const b=document.querySelector('.btn[data-key="'+t.key+'"]');
           if(b) b.textContent = t.label + '  [' + (i+1) + ']';
         }
