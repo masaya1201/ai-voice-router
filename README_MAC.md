@@ -37,16 +37,17 @@ cd ai-voice-router
 
 Windows版の `ショートカットを作成.bat` に当たるものが2つあります。
 
-| | 作られるもの | 時間 | アイコン・権限 |
-|---|---|---|---|
-| `ショートカットを作成.command` | `~/Applications/Voice Router.app`（この場所のコードを呼ぶだけの薄い殻） | 数秒 | Finderのアイコンは専用。**起動中のDockアイコンはPythonのもの**、権限も「Python」に付く |
-| `build_app.command` | `dist/Voice Router.app`（Python同梱の単体アプリ） | 数分 | すべて専用。**配布もできる** |
+| | 作られるもの | 時間 | 大きさ | アプリとしての扱い |
+|---|---|---|---|---|
+| `ショートカットを作成.command` | `~/Applications/Voice Router.app`（この場所のコードを呼ぶだけの薄い殻） | 数秒 | 数KB | Finderのアイコンは専用。ただし**実行中はPythonのアプリとして扱われ**、権限も「Python」に付く |
+| `build_app.command` | `dist/Voice Router.app`（Python同梱の単体アプリ） | 数分 | 約185MB | 名前・アイコン・権限すべて専用。**Pythonが無いMacにも配れる** |
 
 手軽に済ませたいなら前者、ちゃんとしたアプリにしたいなら後者です。
 
-> Python は自分自身を `Python.app` として登録するため、薄い殻の .app から
-> 起動しても実行中はPythonのアプリとして扱われます。これはPyInstallerで
-> 固めた `build_app.command` の方でしか解消できません。
+> Python は自分自身を `Python.app`（`org.python.python`）として登録するため、
+> 薄い殻の .app から起動しても実行中はPythonのアプリになります。
+> これを解消できるのは PyInstaller で固める `build_app.command` の方だけです
+> （こちらは `local.voicerouter` / 表示名 "Voice Router" として登録されます）。
 
 ### 必要な権限（初回のみ）
 

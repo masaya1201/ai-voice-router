@@ -41,56 +41,93 @@ class VoskEngine:
         self._q = None
         self._worker = None
         self._running = False
+        self._fed = False
+        # 認識器(KaldiRecognizer)はスレッド安全ではない。AcceptWaveform と
+        # FinalResult が同時に走ると Kaldi がアサートに失敗して abort() し、
+        # プロセスごと落ちる。必ずこのロックの中だけで触ること。
+        self._lock = threading.Lock()
 
     @property
     def ready(self):
         return self.model is not None
 
     # ---- 録音の開始・供給・停止 ----
+    def _end_worker(self, timeout):
+        """ワーカーに終了を伝えて待つ（認識器には触らない）。"""
+        self._running = False
+        q, w = self._q, self._worker
+        if q is not None:
+            q.put(None)                 # 待ち状態でも即座に抜けられるようにする
+        if w is not None and w.is_alive():
+            w.join(timeout)
+        self._worker = None
+
     def start(self):
         from vosk import KaldiRecognizer
-        self._rec = KaldiRecognizer(self.model, SAMPLE_RATE)
-        self._q = queue.Queue()
-        self._running = True
-        self._worker = threading.Thread(target=self._loop, daemon=True)
-        self._worker.start()
+        self._end_worker(2.0)           # 前回のワーカーが残っていたら終わらせる
+        with self._lock:
+            q = queue.Queue()
+            self._rec = KaldiRecognizer(self.model, SAMPLE_RATE)
+            self._q = q
+            self._fed = False
+            self._running = True
+            self._worker = threading.Thread(target=self._loop, args=(q,),
+                                            daemon=True)
+            self._worker.start()
 
     def feed(self, chunk):
         """録音コールバックから呼ぶ。重い処理はワーカーに渡し、録音を止めない。"""
-        if not self._running or self._q is None:
+        q = self._q
+        if not self._running or q is None:
             return
         arr = np.asarray(chunk, dtype=np.float32).flatten()
         pcm = (np.clip(arr, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
-        self._q.put(pcm)
+        q.put(pcm)
 
-    def _loop(self):
-        while self._running or (self._q is not None and not self._q.empty()):
+    def _loop(self, q):
+        """自分の担当キューを引数で受け取る。start() で作り直されても
+        古いワーカーが新しい認識器を触らないようにするため。"""
+        while True:
             try:
-                pcm = self._q.get(timeout=0.1)
+                pcm = q.get(timeout=0.1)
             except queue.Empty:
+                if not self._running:
+                    return
                 continue
-            try:
-                self._rec.AcceptWaveform(pcm)
-            except Exception:
-                pass
+            if pcm is None:             # 終了の合図
+                return
+            with self._lock:
+                if self._rec is None or self._q is not q:
+                    return              # 停止済み／別の録音に切り替わった
+                try:
+                    self._rec.AcceptWaveform(pcm)
+                    self._fed = True
+                except Exception:
+                    pass
 
-    def stop(self, timeout=3.0):
+    def stop(self, timeout=5.0):
         """録音停止。残りを処理して認識結果を返す。"""
-        self._running = False
-        if self._worker is not None:
-            self._worker.join(timeout)
-        if self._rec is None:
-            return ""
-        try:
-            text = json.loads(self._rec.FinalResult()).get("text", "")
-        except Exception:
-            text = ""
-        self._rec = None
-        self._q = None
+        self._end_worker(timeout)
+        # ワーカーが時間内に終わらなかった場合でも、ロックを取ることで
+        # AcceptWaveform の実行中に FinalResult を呼ぶことは無くなる。
+        with self._lock:
+            rec, self._rec = self._rec, None
+            fed, self._fed = self._fed, False
+            self._q = None
+            if rec is None or not fed:
+                return ""               # 一度も音声を渡していない状態で
+                                        # FinalResult を呼ぶと落ちることがある
+            try:
+                text = json.loads(rec.FinalResult()).get("text", "")
+            except Exception:
+                text = ""
         # 日本語結果は単語が空白で区切られて返るため詰める
         return text.replace(" ", "").strip()
 
     def cancel(self):
-        self._running = False
-        self._rec = None
-        self._q = None
+        """結果を取らずに破棄する。"""
+        self._end_worker(2.0)
+        with self._lock:
+            self._rec = None
+            self._q = None
+            self._fed = False
