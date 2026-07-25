@@ -75,10 +75,16 @@ class HotkeyListener:
     def start(self):
         cfg = json.dumps({"map": {str(k): v for k, v in self.key_map.items()},
                           "swallow": self.swallow})
+        # .app に固めた状態では sys.executable がアプリ本体になり、
+        # スクリプトのパスを渡しても無視されてアプリが二重起動してしまう。
+        # そのため引数だけを渡し、voice_router.py の先頭で拾ってもらう。
+        if getattr(sys, "frozen", False):
+            argv = [sys.executable, "--hotkey-worker", cfg]
+        else:
+            argv = [sys.executable, os.path.abspath(__file__), "--hotkey-worker", cfg]
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, os.path.abspath(__file__), "--hotkey-worker", cfg],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, bufsize=1)
         except Exception:
             return False
@@ -173,8 +179,15 @@ def _worker(cfg):
         listener.join()
 
 
-if __name__ == "__main__" and len(sys.argv) >= 3 and sys.argv[1] == "--hotkey-worker":
+def run_worker_from_argv():
+    """コマンドライン引数の --hotkey-worker <設定> を読んで監視を始める。
+    .app に固めた場合は voice_router.py の先頭からこれが呼ばれる。"""
     try:
-        _worker(json.loads(sys.argv[2]))
+        i = sys.argv.index("--hotkey-worker")
+        _worker(json.loads(sys.argv[i + 1]))
     except Exception:
         pass
+
+
+if __name__ == "__main__" and "--hotkey-worker" in sys.argv:
+    run_worker_from_argv()

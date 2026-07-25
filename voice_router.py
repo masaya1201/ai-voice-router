@@ -12,6 +12,14 @@ UI     : pywebview (HTML/CSS/JS)
 import os
 import sys
 
+# .app に固めた場合、テンキー監視の子プロセスもこの実行ファイルとして起動される
+# （PyInstaller はスクリプトのパスを渡しても無視して常に本体を実行するため）。
+# GUIを立ち上げる前にここで拾って、キー監視だけを行って終わる。
+if "--hotkey-worker" in sys.argv:
+    import hotkeys_mac
+    hotkeys_mac.run_worker_from_argv()
+    sys.exit(0)
+
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")       # Anaconda OpenMP重複回避
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 

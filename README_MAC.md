@@ -113,6 +113,12 @@ Windows版と同じです。README.md を参照してください。
   連携はすべて Python 側からの evaluate_js（プッシュ＆ポーリング）で行っています。
 - グローバルホットキー（pynput）は pywebview と同一プロセスで共存できないため、
   別プロセスのワーカーで監視しています（親終了時に自動終了）。
+  `.app` に固めた場合はスクリプトのパスを渡せないため、`--hotkey-worker` 引数を
+  `voice_router.py` の先頭で拾ってワーカーに切り替えています
+  （これをしないとアプリが二重起動します）。
+- `.app` から起動したときの設定とログは
+  `~/Library/Application Support/VoiceRouter` に作られます
+  （`.app` の中は書き込み先として適切でないため）。
 
 ## Windows版のファイルと macOS版の対応
 
