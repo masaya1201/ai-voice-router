@@ -7,3 +7,6 @@ dist/
 # 利用者ごとの設定・ログ（配布物には含めない）
 voice_router_config.json
 voice_router.log
+
+# uiautomation が出力するログ
+@AutomationLog.txt
