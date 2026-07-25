@@ -139,6 +139,19 @@ pip install -r requirements.txt
 - `kind: "proc"` … デスクトップアプリ。`proc` にプロセス名（タスクマネージャーの「詳細」タブで確認できます）
 - `kind: "browser_tab"` … ブラウザのタブ。`tab` はタブ名の一部、`url` はURLの一部
 - `kind: "click"` … 録音せず、アプリ内のボタンを押すだけ。`button` に押したいボタン名を並べます（音声会話の起動など）
+- `"stt": "app"` … 書き起こしを**送信先アプリ自身に任せる**（ローカル認識を使わないので待ち時間がほぼ無い）
+
+```json
+{ "key": "chatgpt_fast", "label": "ChatGPT 高速", "color": "#0b6e58",
+  "kind": "browser_tab", "browser": "edge", "tab": "chatgpt", "url": "chatgpt.com",
+  "stt": "app",
+  "stt_start":  ["音声入力を開始"],
+  "stt_submit": ["音声入力を送信"],
+  "stt_cancel": ["音声入力をキャンセル"] }
+```
+
+> `stt: "app"` は音声がそのAIサービスへ送られます（ローカル完結ではありません）。
+> ただし送り先は結局そのAI自身なので、実質的な情報の行き先は変わりません。
 
 ```json
 { "key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",

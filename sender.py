@@ -554,6 +554,55 @@ def find_button(win_ctrl, names, page_only=False, timeout=6.0):
     return None
 
 
+def click_named_button(hwnd, names, page_only, label="", timeout=6.0):
+    """開いているウィンドウ内のボタンを名前で押す（対象特定済みの場合に使う）。"""
+    if isinstance(names, str):
+        names = [names]
+    btn = find_button(uia_window(hwnd), names, page_only=page_only, timeout=timeout)
+    if btn is None:
+        return SendResult(False, f"✗ {label}: ボタンが見つかりません",
+                          f"探した名前: {' / '.join(names)}")
+    ip = _pattern(btn, auto.PatternId.InvokePattern)
+    if ip is not None:
+        try:
+            ip.Invoke()
+            return SendResult(True, "")
+        except Exception:
+            pass
+    # Invoke に対応しない部品（Claudeの音声入力など）は既定動作かクリックで押す
+    la = _pattern(btn, auto.PatternId.LegacyIAccessiblePattern)
+    if la is not None:
+        try:
+            la.DoDefaultAction()
+            return SendResult(True, "")
+        except Exception:
+            pass
+    try:
+        btn.Click(simulateMove=False)
+        return SendResult(True, "")
+    except Exception as e:
+        return SendResult(False, f"✗ {label}: ボタンを押せませんでした", str(e)[:60])
+
+
+def wait_for_composer_text(composer, timeout=12.0, poll=0.2):
+    """入力欄に文字が入るまで待って、その内容を返す（アプリ側の書き起こし完了待ち）。"""
+    baseline = read_control_text(composer).strip()
+    deadline = time.time() + timeout
+    stable, last = 0, None
+    while time.time() < deadline:
+        cur = read_control_text(composer).strip()
+        if cur and cur != baseline:
+            if cur == last:
+                stable += 1
+                if stable >= 2:          # 増えなくなったら書き起こし完了とみなす
+                    return cur
+            else:
+                stable = 0
+            last = cur
+        time.sleep(poll)
+    return (last or "").strip()
+
+
 def press_button(target):
     """設定で指定されたボタンを押す（ライブ音声モードの起動など）。
     文字を送るのではなく、アプリ内のボタンを1回クリックする種類の宛先。"""

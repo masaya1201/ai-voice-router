@@ -87,6 +87,15 @@ DEFAULT_CONFIG = {
         {"key": "gemini", "label": "Gemini", "color": "#8e6fd8",
          "kind": "browser_tab", "browser": "edge",
          "tab": "gemini", "url": "gemini.google.com"},
+        # stt="app": 音声の書き起こしをアプリ自身(クラウド)に任せる。
+        # ローカル認識を使わないため待ち時間がほぼ無く、CPUも使わない。
+        {"key": "chatgpt_fast", "label": "ChatGPT 高速", "color": "#0b6e58",
+         "kind": "browser_tab", "browser": "edge",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "stt": "app",
+         "stt_start": ["音声入力を開始", "Start dictation"],
+         "stt_submit": ["音声入力を送信", "Submit dictation"],
+         "stt_cancel": ["音声入力をキャンセル", "Cancel dictation"]},
         # kind="click" は録音せず、アプリ内のボタンを押すだけの宛先。
         # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
         {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
@@ -151,6 +160,7 @@ class Api:
         self.recording = False
         self.frames = []
         self.stream = None
+        self.app_stt = None     # アプリ自身の音声入力を使用中の状態
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self):
@@ -197,7 +207,54 @@ class Api:
         return {"ok": res.ok, "msg": res.msg, "detail": res.detail}
 
     # ---------- 録音 ----------
+    # ---- アプリ自身の音声入力を使うモード ----
+    def _app_stt_start(self, target):
+        """送信先アプリの音声入力ボタンを押して録音を任せる。
+        書き起こしはアプリ側（クラウド）が行うため、ローカル認識より速い。"""
+        prep = sender.prepare_target(target)
+        if prep.error is not None:
+            self.app_stt = None
+            return {"error": prep.error.msg}
+        r = sender.click_named_button(prep.hwnd, target.get("stt_start", []),
+                                      sender._is_browser(target), target["label"])
+        if not r.ok:
+            self.app_stt = None
+            return {"error": r.msg}
+        self.app_stt = {"target": target, "prep": prep}
+        return True
+
+    def _app_stt_stop(self, target):
+        st = self.app_stt
+        self.app_stt = None
+        if st is None:
+            return {"ok": False, "msg": "（音声入力が開始されていません）"}
+        prep = st["prep"]
+        page_only = sender._is_browser(target)
+        r = sender.click_named_button(prep.hwnd, target.get("stt_submit", []),
+                                      page_only, target["label"])
+        if not r.ok:
+            return {"ok": False, "msg": r.msg, "detail": r.detail}
+        # アプリが書き起こして入力欄に入れるのを待つ
+        text = ""
+        if prep.composer is not None:
+            text = sender.wait_for_composer_text(prep.composer)
+        if not text:
+            return {"ok": False, "msg": "（書き起こしが入りませんでした）"}
+        sender.focus_window(prep.hwnd)
+        time.sleep(0.15)
+        if prep.composer is not None:
+            sender.focus_composer(prep.composer, timeout=1.2)
+        sender._key(sender.VK_RETURN)
+        sender._key(sender.VK_RETURN, True)
+        return {"ok": True, "text": text, "name": target["label"],
+                "msg": f"✓ {target['label']} へ送信"}
+
     def start(self, key):
+        target = TARGETS.get(key)
+        if target is not None and target.get("stt") == "app":
+            if self.recording or self.app_stt:
+                return False
+            return self._app_stt_start(target)
         if self.model is None or self.recording:
             return False
         self.recording = True
@@ -217,6 +274,15 @@ class Api:
 
     # ---------- 認識 + 送信 ----------
     def stop(self, key):
+        target0 = TARGETS.get(key)
+        if target0 is not None and target0.get("stt") == "app":
+            try:
+                return self._app_stt_stop(target0)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.app_stt = None
+                return {"ok": False, "msg": f"送信エラー: {e}"}
         if not self.recording:
             return {"ok": False, "msg": "（録音していません）"}
         self.recording = False
