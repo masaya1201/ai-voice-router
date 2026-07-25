@@ -256,6 +256,17 @@ class Api:
         self._rec_lock = threading.Lock()
         threading.Thread(target=self._load, daemon=True).start()
 
+    def _open_mic_early(self):
+        """起動時にマイクを開いておく。
+        macOS のマイク許可ダイアログはマイクを開いた瞬間に出るため、
+        最初の録音のときに出ると、その1回目の発話が丸ごと失われる。
+        起動直後に済ませておけば、押して話した分は必ず録れる。"""
+        try:
+            with self._rec_lock:
+                self._ensure_stream()
+        except Exception:
+            pass
+
     def _load(self):
         try:
             if ENGINE == "vosk":
@@ -264,6 +275,7 @@ class Api:
                                        model_path=CONFIG.get("vosk_model_path"),
                                        model_name=CONFIG.get("vosk_model_name"))
                 self.model = self.vosk        # 準備完了の目印として共用
+                self._open_mic_early()
                 return
             from faster_whisper import WhisperModel
             m = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8",
@@ -276,6 +288,7 @@ class Api:
             except Exception:
                 pass
             self.model = m
+            self._open_mic_early()
         except Exception as e:
             import traceback
             traceback.print_exc()

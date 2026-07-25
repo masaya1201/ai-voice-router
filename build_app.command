@@ -64,6 +64,17 @@ echo "[4/4] 権限の説明文を書き込みます..."
 /usr/libexec/PlistBuddy -c "Add :NSAppleEventsUsageDescription string 送信先のAIアプリやブラウザのタブを前面に出して文字を送るために使います。" "$PLIST" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Set :NSAppleEventsUsageDescription 送信先のAIアプリやブラウザのタブを前面に出して文字を送るために使います。" "$PLIST"
 
+# Info.plist を書き換えるとコード署名が壊れる。壊れたままだと macOS が
+# アプリを識別できず、マイクなどの許可を求めるダイアログすら出ない
+# （システム設定の一覧にも現れない）。必ず署名し直す。
+echo "[5/5] 署名し直します..."
+codesign --force --deep --sign - "dist/$APP_NAME.app" 2>/dev/null
+if codesign --verify --deep --strict "dist/$APP_NAME.app" 2>/dev/null; then
+  echo "  署名OK"
+else
+  echo "  警告: 署名の検証に失敗しました。マイクの許可が求められない可能性があります。"
+fi
+
 echo ""
 echo "完了しました: $HERE/dist/$APP_NAME.app"
 echo "アプリケーションフォルダにドラッグすれば、通常のアプリとして使えます。"
