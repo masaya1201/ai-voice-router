@@ -83,6 +83,16 @@ DEFAULT_CONFIG = {
         {"key": "gemini", "label": "Gemini", "color": "#8e6fd8",
          "kind": "browser_tab", "browser": "edge",
          "tab": "gemini", "url": "gemini.google.com"},
+        # kind="click" は録音せず、アプリ内のボタンを押すだけの宛先。
+        # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
+        {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
+         "kind": "click", "browser": "edge",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を開始する", "Start voice mode", "音声モードを開始"]},
+        {"key": "gpt_voice_end", "label": "■ 音声会話 終了", "color": "#8a8f98",
+         "kind": "click", "browser": "edge",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を終了する", "End voice mode", "音声モードを終了"]},
     ],
 }
 
@@ -143,9 +153,24 @@ class Api:
         return self.load_error
 
     def targets(self):
-        """UIのボタンを設定から自動生成するための一覧。"""
-        return [{"key": t["key"], "label": t["label"], "color": t["color"]}
+        """UIのボタンを設定から自動生成するための一覧。
+        mode='action' は押しただけで実行（録音しない）、'talk' は押しながら話す。"""
+        return [{"key": t["key"], "label": t["label"], "color": t["color"],
+                 "mode": "action" if t.get("kind") == "click" else "talk"}
                 for t in TARGET_LIST]
+
+    def trigger(self, key):
+        """録音せずにアプリ内のボタンを押す（ライブ音声会話の起動など）。"""
+        target = TARGETS.get(key)
+        if target is None:
+            return {"ok": False, "msg": "不明な宛先です"}
+        try:
+            res = sender.press_button(target)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "msg": f"起動エラー: {e}"}
+        return {"ok": res.ok, "msg": res.msg, "detail": res.detail}
 
     # ---------- 録音 ----------
     def start(self, key):
@@ -300,12 +325,18 @@ HTML = r"""
       b.className = 'btn';
       b.dataset.key = t.key;
       b.dataset.label = t.label;
+      b.dataset.mode = t.mode || 'talk';
       b.textContent = t.label;
       b.style.background = t.color;
       b.disabled = true;
-      b.addEventListener('pointerdown', e=>{ b.setPointerCapture(e.pointerId); press(b); });
-      b.addEventListener('pointerup',   e=>{ release(b); });
-      b.addEventListener('pointercancel', e=>{ release(b); });
+      if(b.dataset.mode === 'action'){
+        // 押すだけで実行（録音しない）
+        b.addEventListener('click', ()=>{ runAction(b); });
+      }else{
+        b.addEventListener('pointerdown', e=>{ b.setPointerCapture(e.pointerId); press(b); });
+        b.addEventListener('pointerup',   e=>{ release(b); });
+        b.addEventListener('pointercancel', e=>{ release(b); });
+      }
       wrap.appendChild(b);
     });
   }
@@ -321,9 +352,27 @@ HTML = r"""
     });
   }
 
+  // 画面が固まった原因が分からなくならないよう、JSのエラーは必ず表示する
+  window.onerror = function(msg, src, line){
+    status.textContent = 'JSエラー: ' + msg + ' (line ' + line + ')';
+  };
+
+  // pywebview は api の器を先に作り、メソッドを後から追加する。
+  // 器ができた時点で呼ぶと "not a function" で固まるため、メソッドが揃うまで待つ。
+  let initTries = 0;
+  let initDone = false;
   function init(){
-    if(!window.pywebview || !pywebview.api){ return setTimeout(init,120); }
-    pywebview.api.targets().then(list=>{
+    if(initDone) return;
+    if(!window.pywebview || !pywebview.api || typeof pywebview.api.targets !== 'function'){
+      if(++initTries > 300){ status.textContent = 'APIに接続できません'; return; }
+      return setTimeout(init, 100);
+    }
+    initDone = true;
+    pywebview.api.targets().catch(e=>{
+      status.textContent = 'targets()失敗: ' + e;
+      return null;
+    }).then(list=>{
+      if(!list){ return; }
       buildButtons(list);
       list.forEach((t,i)=>{
         if(i<4){
@@ -335,6 +384,7 @@ HTML = r"""
     });
   }
   init();
+  window.addEventListener('pywebviewready', init);
 
   // --- テンキー(グローバルホットキー)からの通知 ---
   window.hotkeyStart = function(key, label){
@@ -353,6 +403,18 @@ HTML = r"""
                         : (res && res.ok ? '送信しました' : '送信できませんでした');
     detail.textContent = (res && res.detail) ? res.detail : '';
   };
+
+  function runAction(btn){
+    if(!ready || active) return;
+    status.innerHTML = '<b>'+btn.dataset.label+'</b> を起動中…';
+    detail.textContent = '';
+    bubble.textContent = '…';
+    pywebview.api.trigger(btn.dataset.key).then(res=>{
+      status.textContent = (res && res.msg) ? res.msg : '起動できませんでした';
+      detail.textContent = (res && res.detail) ? res.detail : '';
+      bubble.textContent = (res && res.ok) ? '音声会話を開始しました' : '押しながら話してください';
+    });
+  }
 
   function press(btn){
     if(!ready || active) return;
@@ -398,6 +460,14 @@ def setup_hotkeys(api, get_window):
             t = TARGET_LIST[idx]
             try:
                 win = get_window()
+                if t.get("kind") == "click":
+                    # 押すだけの宛先は、キーを離したときに1回だけ実行する
+                    if action == "up":
+                        res = api.trigger(t["key"])
+                        if win:
+                            win.evaluate_js(
+                                f"window.hotkeyResult && hotkeyResult({json.dumps(res)})")
+                    continue
                 if action == "down":
                     api.start(t["key"])
                     if win:
@@ -433,7 +503,9 @@ if __name__ == "__main__":
 
     _window = webview.create_window(
         "Voice Router", html=HTML, js_api=api,
-        width=300, height=300 + 66 * ((len(TARGET_LIST) + 1) // 2),
+        width=300 if len(TARGET_LIST) <= 4 else 340,
+        height=245 + 66 * ((len(TARGET_LIST) + (3 if len(TARGET_LIST) > 4 else 2) - 1)
+                           // (3 if len(TARGET_LIST) > 4 else 2)),
         frameless=True, easy_drag=True,
         on_top=True, background_color="#EAE6E1",
     )

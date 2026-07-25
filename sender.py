@@ -509,7 +509,96 @@ def edge_select_tab(match, url_match=None, browser="edge"):
 # ============================================================
 def _is_browser(target):
     """ブラウザのタブが対象か（旧名 edge_tab も受け付ける）。"""
-    return target.get("kind") in ("browser_tab", "edge_tab")
+    return target.get("kind") in ("browser_tab", "edge_tab") or (
+        target.get("kind") == "click" and bool(target.get("url") or target.get("tab")))
+
+
+def find_button(win_ctrl, names, page_only=False, timeout=6.0):
+    """名前が一致するボタンを探す（完全一致 → 部分一致の順）。"""
+    wanted = [n.strip().lower() for n in names if n]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        exact, partial = [], []
+
+        def walk(x, d=0):
+            if d > 28:
+                return
+            try:
+                ch = x.GetChildren()
+            except Exception:
+                return
+            for y in ch:
+                try:
+                    if y.ControlTypeName in ("ButtonControl", "MenuItemControl", "ListItemControl"):
+                        nm = (y.Name or "").strip().lower()
+                        if nm:
+                            if nm in wanted:
+                                exact.append(y)
+                            elif any(w in nm for w in wanted):
+                                partial.append(y)
+                    walk(y, d + 1)
+                except Exception:
+                    pass
+
+        scopes = find_page_documents(win_ctrl) if page_only else []
+        for sc in (scopes[:2] or [win_ctrl]):
+            walk(sc)
+        for group in (exact, partial):
+            for b in group:
+                try:
+                    if b.IsEnabled:
+                        return b
+                except Exception:
+                    return b
+        time.sleep(0.3)
+    return None
+
+
+def press_button(target):
+    """設定で指定されたボタンを押す（ライブ音声モードの起動など）。
+    文字を送るのではなく、アプリ内のボタンを1回クリックする種類の宛先。"""
+    label = target.get("label", "?")
+    names = target.get("button") or []
+    if isinstance(names, str):
+        names = [names]
+    if not names:
+        return SendResult(False, f"✗ {label}: 押すボタンが設定されていません")
+
+    if _is_browser(target):
+        hwnd, info = edge_select_tab(target.get("tab", ""), target.get("url"),
+                                     target.get("browser", "edge"))
+        if hwnd is None:
+            return SendResult(False, f"✗ {label} のタブが見つかりません")
+    else:
+        hwnd = find_window_by_proc(target["proc"])
+        if hwnd is None:
+            return SendResult(False, f"✗ {label} のウィンドウが見つかりません")
+
+    focus_window(hwnd)
+    time.sleep(0.4)
+
+    btn = find_button(uia_window(hwnd), names, page_only=_is_browser(target))
+    if btn is None:
+        return SendResult(False, f"✗ {label}: ボタンが見つかりません",
+                          f"探した名前: {' / '.join(names)}")
+
+    pressed = False
+    ip = _pattern(btn, auto.PatternId.InvokePattern)
+    if ip is not None:
+        try:
+            ip.Invoke()
+            pressed = True
+        except Exception:
+            pass
+    if not pressed:
+        try:
+            btn.Click(simulateMove=False)
+            pressed = True
+        except Exception:
+            pass
+    if not pressed:
+        return SendResult(False, f"✗ {label}: ボタンを押せませんでした")
+    return SendResult(True, f"✓ {label} を起動しました")
 
 
 class SendResult:
