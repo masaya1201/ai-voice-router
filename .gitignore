@@ -10,3 +10,6 @@ voice_router.log
 
 # uiautomation が出力するログ
 @AutomationLog.txt
+
+# 作業用の一時キャプチャ
+docs/_*.png
