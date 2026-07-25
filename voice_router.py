@@ -248,6 +248,7 @@ class Api:
         self.recording = False
         self.frames = []
         self.stream = None
+        self.peak = 0.0         # 直近の録音で観測した最大音量
         self.app_stt = None     # アプリ自身の音声入力を使用中の状態
         self.vosk = None        # 逐次認識エンジン（ENGINE="vosk" のとき）
         # 録音の開始/停止を直列化する。画面ボタンとテンキーが別スレッドから
@@ -364,6 +365,7 @@ class Api:
             if err:
                 return {"error": err}
             self.frames = []
+            self.peak = 0.0
             if ENGINE == "vosk":
                 self.vosk.start()          # 話している間に逐次認識させる
             self.recording = True
@@ -393,12 +395,32 @@ class Api:
         try:
             if not self.recording:
                 return
+            # 音量を控えておく。認識できなかったときに「そもそも音が
+            # 入っていない」のか「入っているが聞き取れなかった」のかを
+            # 区別して伝えるため（マイク権限の切り分けに要る）。
+            peak = float(np.abs(indata).max())
+            if peak > self.peak:
+                self.peak = peak
             if ENGINE == "vosk":
                 self.vosk.feed(indata)     # 重い処理はエンジン側のワーカーが行う
             else:
                 self.frames.append(indata.copy())
         except Exception:
             pass
+
+    # マイクが無音とみなす閾値。実測: 静かな部屋の暗騒音でピーク約0.03、
+    # 普通に話すと 0.2 以上になる。権限が無いときは完全な 0 が返る。
+    SILENT_PEAK = 0.004
+
+    def _no_speech_result(self):
+        """認識結果が空だったときに、原因が分かる形で返す。"""
+        if self.peak < self.SILENT_PEAK:
+            return {"ok": False, "msg": "✗ マイクから音が入っていません",
+                    "detail": "システム設定 > プライバシーとセキュリティ > "
+                              "マイク でこのアプリを許可してください"}
+        return {"ok": False, "msg": "（認識なし）",
+                "detail": f"音は入っています(音量 {self.peak:.2f})。"
+                          "もう少しはっきり話すか、話し始める前にボタンを押してください"}
 
     def shutdown_stream(self):
         """終了時にストリームを止める。ハングし得るため呼び出し側でタイムアウトを設ける。"""
@@ -444,7 +466,7 @@ class Api:
                 text = punctuate(text)
             th.join(8.0)
             if not text:
-                return {"ok": False, "msg": "（認識なし）"}
+                return self._no_speech_result()
             try:
                 res = sender.send_text(target, text, press_enter=True, verify=True,
                                        prepared=prep_box.get("p"))
@@ -456,7 +478,7 @@ class Api:
                     "msg": res.msg, "detail": res.detail}
 
         if not self.frames:
-            return {"ok": False, "msg": "（無音）"}
+            return self._no_speech_result()
         audio = np.concatenate(self.frames, axis=0).flatten()
         if len(audio) < SAMPLE_RATE * 0.3:
             return {"ok": False, "msg": "（短すぎ）"}
@@ -488,7 +510,7 @@ class Api:
         prepared = prep_box.get("p")
 
         if not text:
-            return {"ok": False, "msg": "（認識なし）"}
+            return self._no_speech_result()
 
         try:
             res = sender.send_text(target, text, press_enter=True, verify=True,
@@ -734,7 +756,16 @@ def make_dispatcher(api, get_window):
                         push_js(f"window.actionResult && actionResult({json.dumps(res)})")
                     continue
                 if action == "down":
-                    api.start(key)
+                    r = api.start(key)
+                    # 録音を始められなかった理由（マイクが使えない等）は
+                    # 黙って捨てず必ず画面に出す。
+                    if isinstance(r, dict) and r.get("error"):
+                        push_js("window.hotkeyResult && hotkeyResult("
+                                + json.dumps({
+                                    "ok": False,
+                                    "msg": "✗ マイクを開けませんでした",
+                                    "detail": str(r["error"])[:120]}) + ")")
+                        continue
                     push_js(f"window.hotkeyStart && hotkeyStart({json.dumps(key)},"
                             f"{json.dumps(t['label'])})")
                 elif action == "up":
