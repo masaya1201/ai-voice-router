@@ -611,7 +611,59 @@ class SendResult:
         return f"SendResult(ok={self.ok}, msg={self.msg!r}, detail={self.detail!r})"
 
 
-def send_text(target, text, press_enter=True, verify=True):
+class Prepared:
+    """送信先の準備結果（ウィンドウ特定・前面化・入力欄フォーカスまで済んだ状態）。
+    音声認識と並行して先に済ませておくことで、体感の待ち時間を短くする。"""
+
+    def __init__(self, target, hwnd=None, composer=None,
+                 focused_win=False, focus_ok=False, error=None):
+        self.target = target
+        self.hwnd = hwnd
+        self.composer = composer
+        self.focused_win = focused_win
+        self.focus_ok = focus_ok
+        self.error = error          # SendResult（失敗時）
+
+
+def prepare_target(target):
+    """送信先を開いて入力欄にフォーカスするところまでを行う（文字は入れない）。"""
+    label = target.get("label", "?")
+
+    if _is_browser(target):
+        hwnd, info = edge_select_tab(target["tab"], target.get("url"),
+                                     target.get("browser", "edge"))
+        if hwnd is None:
+            tabs = "／".join(t[:20] for t in info[:6]) if isinstance(info, list) else ""
+            return Prepared(target, error=SendResult(
+                False, f"✗ Edgeに「{target['tab']}」のタブがありません", f"開いているタブ: {tabs}"))
+    else:
+        hwnd = find_window_by_proc(target["proc"])
+        if hwnd is None:
+            return Prepared(target, error=SendResult(
+                False, f"✗ {label} のウィンドウが見つかりません"))
+
+    focused_win = focus_window(hwnd)
+    time.sleep(0.15)
+    if _is_browser(target):
+        time.sleep(0.35)
+
+    composer, focus_ok = None, False
+    try:
+        composer = find_composer(uia_window(hwnd), page_only=_is_browser(target))
+        if composer is not None:
+            focus_ok = focus_composer(composer)
+    except Exception:
+        composer = None
+
+    if _is_browser(target) and composer is None:
+        return Prepared(target, hwnd, error=SendResult(
+            False, f"✗ {label} のページ内に入力欄が見つかりません",
+            "ページが読み込み中か、ログイン画面の可能性"))
+
+    return Prepared(target, hwnd, composer, focused_win, focus_ok)
+
+
+def send_text(target, text, press_enter=True, verify=True, prepared=None):
     """
     target: dict
       kind='proc'     -> proc='claude.exe'
@@ -619,46 +671,24 @@ def send_text(target, text, press_enter=True, verify=True):
     """
     label = target.get("label", "?")
 
-    # --- 1. ウィンドウ特定（Edgeはタブ選択も） ---
-    if _is_browser(target):
-        hwnd, info = edge_select_tab(target["tab"], target.get("url"),
-                                     target.get("browser", "edge"))
-        if hwnd is None:
-            tabs = "／".join(t[:20] for t in info[:6]) if isinstance(info, list) else ""
-            return SendResult(False, f"✗ Edgeに「{target['tab']}」のタブがありません",
-                              f"開いているタブ: {tabs}")
-    else:
-        hwnd = find_window_by_proc(target["proc"])
-        if hwnd is None:
-            return SendResult(False, f"✗ {label} のウィンドウが見つかりません")
+    # --- 1〜3. 送信先の準備（済んでいれば再利用して待ち時間を省く） ---
+    prep = prepared if prepared is not None else prepare_target(target)
+    if prep.error is not None:
+        return prep.error
+    hwnd = prep.hwnd
+    composer = prep.composer
+    focused_win = prep.focused_win
+    focus_ok = prep.focus_ok
 
-    # --- 2. 前面化 ---
-    focused_win = focus_window(hwnd)
-    time.sleep(0.15)
-
-    # Edgeはタブ切替直後にページ描画が要るので少し待つ
-    if _is_browser(target):
-        time.sleep(0.35)
-
-    # --- 3. 入力欄を特定し、"実際にフォーカスが入るまで"待つ ---
-    composer = None
-    focus_ok = False
-    try:
-        win_ctrl = uia_window(hwnd)
-        composer = find_composer(win_ctrl, page_only=_is_browser(target))
+    # 準備から時間が経っていると別ウィンドウが前面に来ている場合があるため入れ直す
+    if user32.GetForegroundWindow() != hwnd:
+        focused_win = focus_window(hwnd)
         if composer is not None:
             focus_ok = focus_composer(composer)
-    except Exception:
-        composer = None
 
     # --- 4. 貼り付け（検証つきで最大3回） ---
     pyperclip.copy(text)
     time.sleep(0.08)
-
-    # ブラウザは入力欄を特定できないまま貼るとアドレスバー等へ誤爆する恐れがあるため中止する
-    if _is_browser(target) and composer is None:
-        return SendResult(False, f"✗ {label} のページ内に入力欄が見つかりません",
-                          "ChatGPTのページが読み込み中か、ログイン画面の可能性")
 
     needle = text.strip()[:12]
 

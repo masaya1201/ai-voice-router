@@ -48,9 +48,12 @@ import sender
 # ============================================================
 # 設定
 # ============================================================
-MODEL_SIZE = "small"   # base(速い) / small(推奨) / medium(高精度・重い)
-LANGUAGE = None        # None=自動判定(日/英) / "ja"=日本語固定(最速) / "en"=英語固定
+MODEL_SIZE = "small"   # base(速いが日本語精度が落ちる) / small(推奨) / medium(高精度・重い)
+# 言語を固定すると判定処理が省けて大幅に速い。None=自動判定(遅い)
+LANGUAGE = "ja"
 SAMPLE_RATE = 16000
+# CPUスレッド数。全コアを使うとかえって遅くなる（実測: 12スレッドは6スレッドの約2倍遅い）
+CPU_THREADS = 6
 
 # テンキー 1〜4 を各AIに割り当てる（押している間だけ録音／離すと送信）
 HOTKEYS_ENABLED = True
@@ -69,6 +72,7 @@ HOTKEY_SWALLOW = True
 DEFAULT_CONFIG = {
     "model_size": MODEL_SIZE,
     "language": LANGUAGE,
+    "cpu_threads": CPU_THREADS,
     "hotkeys_enabled": HOTKEYS_ENABLED,
     "hotkey_swallow": HOTKEY_SWALLOW,
     "targets": [
@@ -120,10 +124,21 @@ def load_config():
 CONFIG = load_config()
 MODEL_SIZE = CONFIG.get("model_size", MODEL_SIZE)
 LANGUAGE = CONFIG.get("language", LANGUAGE)
+CPU_THREADS = CONFIG.get("cpu_threads", CPU_THREADS)
 HOTKEYS_ENABLED = CONFIG.get("hotkeys_enabled", HOTKEYS_ENABLED)
 HOTKEY_SWALLOW = CONFIG.get("hotkey_swallow", HOTKEY_SWALLOW)
 TARGET_LIST = CONFIG.get("targets", DEFAULT_CONFIG["targets"])
 TARGETS = {t["key"]: t for t in TARGET_LIST}
+
+# 認識の速度に効く設定。beam_size=1・タイムスタンプ無し・無音除去で大幅に短縮できる
+TRANSCRIBE_OPTS = dict(
+    language=LANGUAGE,
+    beam_size=1,                    # 5→1 で大幅に短縮（精度はほぼ変わらず）
+    without_timestamps=True,
+    condition_on_previous_text=False,
+    vad_filter=True,                # 無音を除いて処理量を減らす
+    chunk_length=10,                # 既定30秒→10秒。短い発話でも30秒分処理するのを避ける
+)
 
 
 # ============================================================
@@ -140,7 +155,16 @@ class Api:
 
     def _load(self):
         try:
-            self.model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+            m = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8",
+                             cpu_threads=CPU_THREADS)
+            # 初回だけ極端に遅くならないよう、空音声で一度動かして温めておく
+            try:
+                segs, _ = m.transcribe(np.zeros(SAMPLE_RATE, dtype="float32"),
+                                       **TRANSCRIBE_OPTS)
+                list(segs)
+            except Exception:
+                pass
+            self.model = m
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -210,17 +234,37 @@ class Api:
         if len(audio) < SAMPLE_RATE * 0.3:
             return {"ok": False, "msg": "（短すぎ）"}
 
+        target = TARGETS[key]
+
+        # 送信先の準備（ウィンドウ/タブ切替・入力欄フォーカス）は音声認識と並行して行う。
+        # 直列にすると認識が終わってから数秒待つことになるため。
+        prep_box = {}
+
+        def _prepare():
+            try:
+                prep_box["p"] = sender.prepare_target(target)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+        prep_thread = threading.Thread(target=_prepare, daemon=True)
+        prep_thread.start()
+
         try:
-            segs, _info = self.model.transcribe(audio, language=LANGUAGE, beam_size=5)
+            segs, _info = self.model.transcribe(audio, **TRANSCRIBE_OPTS)
             text = "".join(s.text for s in segs).strip()
         except Exception as e:
             return {"ok": False, "msg": f"認識失敗: {e}"}
+
+        prep_thread.join(8.0)
+        prepared = prep_box.get("p")
+
         if not text:
             return {"ok": False, "msg": "（認識なし）"}
 
-        target = TARGETS[key]
         try:
-            res = sender.send_text(target, text, press_enter=True, verify=True)
+            res = sender.send_text(target, text, press_enter=True, verify=True,
+                                   prepared=prepared)
         except Exception as e:
             import traceback
             traceback.print_exc()
