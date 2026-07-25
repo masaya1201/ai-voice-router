@@ -167,7 +167,8 @@ pip install -r requirements.txt
 
 | 項目 | 説明 |
 |------|------|
-| `engine` | `"vosk"`（既定・**離した瞬間に送信**） / `"whisper"`（精度は少し上だが数秒待つ） |
+| `engine` | `"vosk"`（既定・**離した瞬間に送信**） / `"whisper"`（数秒待つ） |
+| `vosk_model_name` | `null`＝小さいモデル(48MB)。**`"vosk-model-ja-0.22"` を指定すると精度が上がります**（約1.5GB・初回のみ自動取得） |
 | `model_size` | whisper使用時のみ。`base`（最速・日本語の精度は落ちる） / `small`（推奨） / `medium`（高精度・かなり重い） |
 | `language` | `"ja"`＝日本語固定（既定・最速） / `"en"`＝英語固定 / `null`＝自動判定（遅くなります） |
 | `cpu_threads` | 音声認識に使うCPUスレッド数（既定 6）。**全コアを指定するとかえって遅くなります** |
