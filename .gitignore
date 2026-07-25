@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+# 利用者ごとの設定・ログ（配布物には含めない）
+voice_router_config.json
+voice_router.log
