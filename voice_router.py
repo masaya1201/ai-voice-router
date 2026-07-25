@@ -45,6 +45,7 @@ from faster_whisper import WhisperModel
 import hotkeys
 import sender
 from punctuate import punctuate
+import vocab
 
 # ============================================================
 # 設定
@@ -352,7 +353,9 @@ class Api:
                 target=lambda: prep_box.update(p=sender.prepare_target_threadsafe(target)),
                 daemon=True)
             th.start()
-            text = punctuate(self.vosk.stop()) if PUNCTUATE else self.vosk.stop()
+            text = vocab.get(APP_DIR).apply(self.vosk.stop())
+            if PUNCTUATE:
+                text = punctuate(text)
             th.join(8.0)
             if not text:
                 return {"ok": False, "msg": "（認識なし）"}
@@ -389,6 +392,7 @@ class Api:
         try:
             segs, _info = self.model.transcribe(audio, **TRANSCRIBE_OPTS)
             text = "".join(s.text for s in segs).strip()
+            text = vocab.get(APP_DIR).apply(text)
             if PUNCTUATE:
                 text = punctuate(text)
         except Exception as e:
