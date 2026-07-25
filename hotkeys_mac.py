@@ -23,13 +23,22 @@ import subprocess
 import sys
 import threading
 
-# macOS のキーコード: テンキー 1〜4
+# macOS のキーコード: テンキー 1〜9
+# (macOS には NumLock が無いため、Windows版のような NumLock OFF 用の
+#  代替キーコードは不要)
 VK_NUMPAD1 = 83
 VK_NUMPAD2 = 84
 VK_NUMPAD3 = 85
 VK_NUMPAD4 = 86
+VK_NUMPAD5 = 87
+VK_NUMPAD6 = 88
+VK_NUMPAD7 = 89
+VK_NUMPAD8 = 91
+VK_NUMPAD9 = 92
 
-NUMPAD_KEYS = [VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4]
+NUMPAD_KEYS = [VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5,
+               VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9]
+MAX_HOTKEYS = len(NUMPAD_KEYS)
 
 
 class HotkeyListener:
@@ -106,9 +115,10 @@ class HotkeyListener:
 
 
 def numpad_map(count, include_numlock_off=True):
-    """先頭 count 個の宛先に テンキー1..4 を割り当てるマップを作る。
+    """先頭 count 個の宛先に テンキー1..9 を順に割り当てるマップを作る。
+    画面のボタンの並び順とテンキーの数字が一致する。
     (macOS には NumLock が無いため include_numlock_off は無視される)"""
-    return {NUMPAD_KEYS[i]: i for i in range(min(count, 4))}
+    return {NUMPAD_KEYS[i]: i for i in range(min(count, MAX_HOTKEYS))}
 
 
 # ============================================================

@@ -1,3 +1,6 @@
+# macOS(arm64)向けのwheelは 0.3.44 が最新のため、条件を分ける
+vosk>=0.3.45; sys_platform != "darwin"
+vosk>=0.3.44; sys_platform == "darwin"
 faster-whisper>=1.0
 sounddevice>=0.4
 numpy>=1.24

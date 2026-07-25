@@ -49,13 +49,29 @@ if IS_MAC:
 else:
     import hotkeys
     import sender
+from punctuate import punctuate
+import vocab
 
 # ============================================================
 # 設定
 # ============================================================
-MODEL_SIZE = "small"   # base(速い) / small(推奨) / medium(高精度・重い)
-LANGUAGE = None        # None=自動判定(日/英) / "ja"=日本語固定(最速) / "en"=英語固定
+# 音声認識エンジン
+#   "vosk"    : 話している最中に認識するため、離した瞬間に送信される（推奨）
+#   "whisper" : 精度は少し高いが、離してから数秒待つ（CPUのみの場合）
+ENGINE = "vosk"
+
+# 認識結果に句点(。)を補う。Voskは句読点を出さないため。
+PUNCTUATE = True
+
+MODEL_SIZE = "small"   # base(速いが日本語精度が落ちる) / small(推奨) / medium(高精度・重い)
+# 言語を固定すると判定処理が省けて大幅に速い。None=自動判定(遅い)
+LANGUAGE = "ja"
 SAMPLE_RATE = 16000
+# 使用するマイク。null=Windowsの既定。名前の一部（例 "ヘッドセット"）か番号で指定できる。
+# 内蔵マイクはスピーカーの音（動画や音楽）を拾うため、ヘッドセットの方が正確に認識できる。
+INPUT_DEVICE = None
+# CPUスレッド数。全コアを使うとかえって遅くなる（実測: 12スレッドは6スレッドの約2倍遅い）
+CPU_THREADS = 6
 
 # テンキー 1〜4 を各AIに割り当てる（押している間だけ録音／離すと送信）
 HOTKEYS_ENABLED = True
@@ -72,10 +88,12 @@ HOTKEY_SWALLOW = True
 #   {"key":"pplx","label":"Perplexity","color":"#20808d","kind":"edge_tab","tab":"perplexity"},
 # ============================================================
 if IS_MAC:
-    # macOS: kind="app" は app= にアプリ名（/Applications の .app 名）
+    # macOS: デスクトップアプリは kind="app" + app= にアプリ名（.app の名前）。
+    # ブラウザは Edge ではなく Chrome を既定にする。
     _DEFAULT_TARGETS = [
         {"key": "claude", "label": "Claude", "color": "#d97757",
          "kind": "app", "app": "Claude"},
+        # タブ名は会話タイトルに変わるため URL でも判定する
         {"key": "chatgpt_web", "label": "ChatGPT Web", "color": "#3a8fd6",
          "kind": "browser_tab", "browser": "chrome",
          "tab": "chatgpt", "url": "chatgpt.com"},
@@ -85,6 +103,17 @@ if IS_MAC:
         {"key": "claude_web", "label": "Claude Web", "color": "#b8622f",
          "kind": "browser_tab", "browser": "chrome",
          "tab": "claude", "url": "claude.ai"},
+        # kind="click" は録音せず、ページ内のボタンを押すだけの宛先。
+        # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
+        # macOSでは Chrome の「Apple Events からの JavaScript を許可」が必要。
+        {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
+         "kind": "click", "browser": "chrome",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を開始する", "Start voice mode", "音声モードを開始"]},
+        {"key": "gpt_voice_end", "label": "■ 音声会話 終了", "color": "#8a8f98",
+         "kind": "click", "browser": "chrome",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を終了する", "End voice mode", "音声モードを終了"]},
     ]
 else:
     _DEFAULT_TARGETS = [
@@ -99,11 +128,28 @@ else:
         {"key": "gemini", "label": "Gemini", "color": "#8e6fd8",
          "kind": "browser_tab", "browser": "edge",
          "tab": "gemini", "url": "gemini.google.com"},
+        # kind="click" は録音せず、アプリ内のボタンを押すだけの宛先。
+        # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
+        {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
+         "kind": "click", "browser": "edge",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を開始する", "Start voice mode", "音声モードを開始"]},
+        {"key": "gpt_voice_end", "label": "■ 音声会話 終了", "color": "#8a8f98",
+         "kind": "click", "browser": "edge",
+         "tab": "chatgpt", "url": "chatgpt.com",
+         "button": ["音声を終了する", "End voice mode", "音声モードを終了"]},
     ]
 
 DEFAULT_CONFIG = {
+    "engine": ENGINE,
+    "punctuate": PUNCTUATE,
+    # Voskのモデル。未指定なら小さい既定モデル(48MB)。
+    # "vosk-model-ja-0.22" にすると大きい高精度モデル(約1.5GB・初回に自動取得)
+    "vosk_model_name": None,
     "model_size": MODEL_SIZE,
     "language": LANGUAGE,
+    "cpu_threads": CPU_THREADS,
+    "input_device": INPUT_DEVICE,
     "hotkeys_enabled": HOTKEYS_ENABLED,
     "hotkey_swallow": HOTKEY_SWALLOW,
     "targets": _DEFAULT_TARGETS,
@@ -131,12 +177,47 @@ def load_config():
 
 
 CONFIG = load_config()
+ENGINE = (CONFIG.get("engine") or ENGINE).lower()
+PUNCTUATE = CONFIG.get("punctuate", PUNCTUATE)
 MODEL_SIZE = CONFIG.get("model_size", MODEL_SIZE)
 LANGUAGE = CONFIG.get("language", LANGUAGE)
+CPU_THREADS = CONFIG.get("cpu_threads", CPU_THREADS)
+INPUT_DEVICE = CONFIG.get("input_device", INPUT_DEVICE)
 HOTKEYS_ENABLED = CONFIG.get("hotkeys_enabled", HOTKEYS_ENABLED)
 HOTKEY_SWALLOW = CONFIG.get("hotkey_swallow", HOTKEY_SWALLOW)
 TARGET_LIST = CONFIG.get("targets", DEFAULT_CONFIG["targets"])
 TARGETS = {t["key"]: t for t in TARGET_LIST}
+
+# 認識の速度に効く設定。beam_size=1・タイムスタンプ無し・無音除去で大幅に短縮できる
+TRANSCRIBE_OPTS = dict(
+    language=LANGUAGE,
+    beam_size=1,                    # 5→1 で大幅に短縮（精度はほぼ変わらず）
+    without_timestamps=True,
+    condition_on_previous_text=False,
+    vad_filter=True,                # 無音を除いて処理量を減らす
+    chunk_length=10,                # 既定30秒→10秒。短い発話でも30秒分処理するのを避ける
+)
+
+
+def resolve_input_device(spec):
+    """設定のマイク指定（番号 or 名前の一部）を実際のデバイス番号に変換する。
+    見つからなければ None（Windowsの既定マイク）を返す。"""
+    if spec is None or spec == "":
+        return None
+    try:
+        if isinstance(spec, int):
+            return spec
+        text = str(spec).strip()
+        if text.isdigit():
+            return int(text)
+        low = text.lower()
+        for i, d in enumerate(sd.query_devices()):
+            if d["max_input_channels"] > 0 and low in d["name"].lower():
+                return i
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    return None
 
 
 # ============================================================
@@ -144,57 +225,119 @@ TARGETS = {t["key"]: t for t in TARGET_LIST}
 # ============================================================
 class Api:
     def __init__(self):
-        self._model = None
+        self.model = None
         self.load_error = None
         self.recording = False
         self.frames = []
         self.stream = None
-        # 録音ストリームの開閉を直列化する。GUIボタンとホットキーが別スレッドから
-        # 同時に叩くと、close中のストリームへオーディオスレッドがコールバックして
-        # SIGSEGVで落ちる（macOSのCoreAudioで顕在化）。
+        self.app_stt = None     # アプリ自身の音声入力を使用中の状態
+        self.vosk = None        # 逐次認識エンジン（ENGINE="vosk" のとき）
+        # 録音の開始/停止を直列化する。画面ボタンとテンキーが別スレッドから
+        # 同時に叩くと、オーディオスレッドと競合してクラッシュし得る。
         self._rec_lock = threading.Lock()
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self):
         try:
-            self._model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+            if ENGINE == "vosk":
+                from vosk_stt import VoskEngine
+                self.vosk = VoskEngine(lang=(LANGUAGE or "ja"),
+                                       model_path=CONFIG.get("vosk_model_path"),
+                                       model_name=CONFIG.get("vosk_model_name"))
+                self.model = self.vosk        # 準備完了の目印として共用
+                return
+            from faster_whisper import WhisperModel
+            m = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8",
+                             cpu_threads=CPU_THREADS)
+            # 初回だけ極端に遅くならないよう、空音声で一度動かして温めておく
+            try:
+                segs, _ = m.transcribe(np.zeros(SAMPLE_RATE, dtype="float32"),
+                                       **TRANSCRIBE_OPTS)
+                list(segs)
+            except Exception:
+                pass
+            self.model = m
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.load_error = f"{type(e).__name__}: {e}"
 
     def ready(self):
-        return self._model is not None
+        return self.model is not None
 
     def error(self):
         return self.load_error
 
     def targets(self):
-        """UIのボタンを設定から自動生成するための一覧。"""
-        return [{"key": t["key"], "label": t["label"], "color": t["color"]}
+        """UIのボタンを設定から自動生成するための一覧。
+        mode='action' は押しただけで実行（録音しない）、'talk' は押しながら話す。"""
+        return [{"key": t["key"], "label": t["label"], "color": t["color"],
+                 "mode": "action" if t.get("kind") == "click" else "talk"}
                 for t in TARGET_LIST]
 
-    # ---------- 録音 ----------
-    # 注意(macOS): 録音のたびにストリームを開閉したり start/stop を繰り返すと、
-    # CoreAudio が数サイクルでハング（Pa_StopStream が無限ブロック）または
-    # SIGSEGV する。ストリームは初回に一度だけ開いて起動しっぱなしにし、
-    # 録音の on/off は recording フラグだけで制御する。
-    # 録音していない間の音声はその場で捨てられる（保存も送信もされない）。
-    def _ensure_stream(self):
-        """常時起動の入力ストリームを用意する。_rec_lock を保持して呼ぶこと。"""
-        if self.stream is not None:
-            return None
+    def trigger(self, key):
+        """録音せずにアプリ内のボタンを押す（ライブ音声会話の起動など）。"""
+        target = TARGETS.get(key)
+        if target is None:
+            return {"ok": False, "msg": "不明な宛先です"}
         try:
-            stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                                    dtype="float32", callback=self._cb)
-            stream.start()
+            res = sender.press_button(target)
         except Exception as e:
-            return str(e)
-        self.stream = stream
-        return None
+            import traceback
+            traceback.print_exc()
+            return {"ok": False, "msg": f"起動エラー: {e}"}
+        return {"ok": res.ok, "msg": res.msg, "detail": res.detail}
+
+    # ---------- 録音 ----------
+    # ---- アプリ自身の音声入力を使うモード ----
+    def _app_stt_start(self, target):
+        """送信先アプリの音声入力ボタンを押して録音を任せる。
+        書き起こしはアプリ側（クラウド）が行うため、ローカル認識より速い。"""
+        prep = sender.prepare_target(target)
+        if prep.error is not None:
+            self.app_stt = None
+            return {"error": prep.error.msg}
+        r = sender.click_named_button(prep.hwnd, target.get("stt_start", []),
+                                      sender._is_browser(target), target["label"])
+        if not r.ok:
+            self.app_stt = None
+            return {"error": r.msg}
+        self.app_stt = {"target": target, "prep": prep}
+        return True
+
+    def _app_stt_stop(self, target):
+        st = self.app_stt
+        self.app_stt = None
+        if st is None:
+            return {"ok": False, "msg": "（音声入力が開始されていません）"}
+        prep = st["prep"]
+        page_only = sender._is_browser(target)
+        r = sender.click_named_button(prep.hwnd, target.get("stt_submit", []),
+                                      page_only, target["label"])
+        if not r.ok:
+            return {"ok": False, "msg": r.msg, "detail": r.detail}
+        # アプリが書き起こして入力欄に入れるのを待つ
+        text = ""
+        if prep.composer is not None:
+            text = sender.wait_for_composer_text(prep.composer)
+        if not text:
+            return {"ok": False, "msg": "（書き起こしが入りませんでした）"}
+        sender.focus_window(prep.hwnd)
+        time.sleep(0.15)
+        if prep.composer is not None:
+            sender.focus_composer(prep.composer, timeout=1.2)
+        sender._key(sender.VK_RETURN)
+        sender._key(sender.VK_RETURN, True)
+        return {"ok": True, "text": text, "name": target["label"],
+                "msg": f"✓ {target['label']} へ送信"}
 
     def start(self, key):
-        if self._model is None:
+        target = TARGETS.get(key)
+        if target is not None and target.get("stt") == "app":
+            if self.recording or self.app_stt:
+                return False
+            return self._app_stt_start(target)
+        if self.model is None:
             return False
         with self._rec_lock:
             if self.recording:
@@ -203,13 +346,38 @@ class Api:
             if err:
                 return {"error": err}
             self.frames = []
+            if ENGINE == "vosk":
+                self.vosk.start()          # 話している間に逐次認識させる
             self.recording = True
             return True
+
+    def _ensure_stream(self):
+        """入力ストリームを用意する。_rec_lock を保持して呼ぶこと。
+        macOS注意: 録音のたびにストリームを開閉したり start/stop を繰り返すと、
+        CoreAudio が数サイクルでハング（Pa_StopStream が無限ブロック）または
+        SIGSEGV する。そのため一度開いたら起動しっぱなしにし、録音の on/off は
+        recording フラグだけで制御する。録音していない間の音声はコールバックで
+        その場で捨てられる（保存も認識も送信もされない）。"""
+        if self.stream is not None:
+            return None
+        try:
+            stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                                    dtype="float32", callback=self._cb,
+                                    device=resolve_input_device(INPUT_DEVICE))
+            stream.start()
+        except Exception as e:
+            return str(e)
+        self.stream = stream
+        return None
 
     def _cb(self, indata, frames, t, status):
         # オーディオスレッドから呼ばれる。例外をC側へ漏らさない。
         try:
-            if self.recording:
+            if not self.recording:
+                return
+            if ENGINE == "vosk":
+                self.vosk.feed(indata)     # 重い処理はエンジン側のワーカーが行う
+            else:
                 self.frames.append(indata.copy())
         except Exception:
             pass
@@ -228,29 +396,85 @@ class Api:
 
     # ---------- 認識 + 送信 ----------
     def stop(self, key):
+        target0 = TARGETS.get(key)
+        if target0 is not None and target0.get("stt") == "app":
+            try:
+                return self._app_stt_stop(target0)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.app_stt = None
+                return {"ok": False, "msg": f"送信エラー: {e}"}
+        # ストリームは閉じない（_ensure_stream のコメント参照）。録音を止めるのは
+        # フラグだけで、以降の音声はコールバックで捨てられる。
         with self._rec_lock:
             if not self.recording:
                 return {"ok": False, "msg": "（録音していません）"}
             self.recording = False
-            frames, self.frames = self.frames, []
 
-        if not frames:
+        target = TARGETS[key]
+
+        # --- Vosk: 認識は録音中に終わっているので、ここでは結果を受け取るだけ ---
+        if ENGINE == "vosk":
+            prep_box = {}
+            th = threading.Thread(
+                target=lambda: prep_box.update(p=sender.prepare_target_threadsafe(target)),
+                daemon=True)
+            th.start()
+            text = vocab.get(APP_DIR).apply(self.vosk.stop())
+            if PUNCTUATE:
+                text = punctuate(text)
+            th.join(8.0)
+            if not text:
+                return {"ok": False, "msg": "（認識なし）"}
+            try:
+                res = sender.send_text(target, text, press_enter=True, verify=True,
+                                       prepared=prep_box.get("p"))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return {"ok": False, "text": text, "msg": f"送信エラー: {e}"}
+            return {"ok": res.ok, "text": text, "name": target["label"],
+                    "msg": res.msg, "detail": res.detail}
+
+        if not self.frames:
             return {"ok": False, "msg": "（無音）"}
-        audio = np.concatenate(frames, axis=0).flatten()
+        audio = np.concatenate(self.frames, axis=0).flatten()
         if len(audio) < SAMPLE_RATE * 0.3:
             return {"ok": False, "msg": "（短すぎ）"}
 
+        # 送信先の準備（ウィンドウ/タブ切替・入力欄フォーカス）は音声認識と並行して行う。
+        # 直列にすると認識が終わってから数秒待つことになるため。
+        prep_box = {}
+
+        def _prepare():
+            try:
+                prep_box["p"] = sender.prepare_target_threadsafe(target)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+
+        prep_thread = threading.Thread(target=_prepare, daemon=True)
+        prep_thread.start()
+
         try:
-            segs, _info = self._model.transcribe(audio, language=LANGUAGE, beam_size=5)
+            segs, _info = self.model.transcribe(audio, **TRANSCRIBE_OPTS)
             text = "".join(s.text for s in segs).strip()
+            text = vocab.get(APP_DIR).apply(text)
+            if PUNCTUATE:
+                text = punctuate(text)
         except Exception as e:
             return {"ok": False, "msg": f"認識失敗: {e}"}
+
+        prep_thread.join(8.0)
+        prepared = prep_box.get("p")
+
         if not text:
             return {"ok": False, "msg": "（認識なし）"}
 
-        target = TARGETS[key]
         try:
-            res = sender.send_text(target, text, press_enter=True, verify=True)
+            res = sender.send_text(target, text, press_enter=True, verify=True,
+                                   prepared=prepared)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -271,7 +495,8 @@ HTML = r"""
 <!doctype html><html><head><meta charset="utf-8">
 <style>
   * { box-sizing: border-box; -webkit-user-select: none; user-select: none; }
-  html,body { margin:0; height:100%; font-family:"Yu Gothic UI","Segoe UI","Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif; }
+  html,body { margin:0; height:100%;
+    font-family:"Yu Gothic UI","Segoe UI","Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif; }
   body {
     background: radial-gradient(120% 120% at 50% 0%, #f4f1ec 0%, #e7e1d8 100%);
     color:#3a3a3a; overflow:hidden;
@@ -338,10 +563,9 @@ HTML = r"""
   <div class="detail" id="detail"></div>
 
 <script>
-  // JS→Python の pywebview ブリッジは macOS で稀に沈黙する（呼び出しや
-  // 応答が失われ、復旧しない）。そのため操作は __vr_actions キューに積み、
-  // Python 側が evaluate_js（こちらは安定）で吸い上げる方式にしている。
-  // 状態（宛先一覧・準備完了・結果）も Python から push される。
+  // JS→Python の pywebview ブリッジは macOS で稀に沈黙する（呼び出しや応答が
+  // 失われ、復旧しない）。そのため操作は __vr_actions キューに積み、Python 側が
+  // evaluate_js（こちらは安定）で吸い上げる。状態も Python から push される。
   const bubble = document.getElementById('bubble');
   const status = document.getElementById('status');
   const detail = document.getElementById('detail');
@@ -360,22 +584,33 @@ HTML = r"""
       b.className = 'btn';
       b.dataset.key = t.key;
       b.dataset.label = t.label;
+      b.dataset.mode = t.mode || 'talk';
       b.textContent = t.label;
       b.style.background = t.color;
       b.disabled = true;
-      b.addEventListener('pointerdown', e=>{ b.setPointerCapture(e.pointerId); press(b); });
-      b.addEventListener('pointerup',   e=>{ release(b); });
-      b.addEventListener('pointercancel', e=>{ release(b); });
+      if(b.dataset.mode === 'action'){
+        // 押すだけで実行（録音しない）
+        b.addEventListener('click', ()=>{ runAction(b); });
+      }else{
+        b.addEventListener('pointerdown', e=>{ b.setPointerCapture(e.pointerId); press(b); });
+        b.addEventListener('pointerup',   e=>{ release(b); });
+        b.addEventListener('pointercancel', e=>{ release(b); });
+      }
       wrap.appendChild(b);
     });
   }
 
-  // --- Python から push される状態 ---
+  // 画面が固まった原因が分からなくならないよう、JSのエラーは必ず表示する
+  window.onerror = function(msg, src, line){
+    status.textContent = 'JSエラー: ' + msg + ' (line ' + line + ')';
+  };
+
+  // --- Python から push される状態（pushTargets / pushReady / pushError） ---
   window.pushTargets = function(list){
-    if(document.querySelectorAll('.btn').length) return true;
+    if(document.querySelectorAll('.btn').length) return true;   // 二重生成の防止
     buildButtons(list);
     list.forEach((t,i)=>{
-      if(i<4){
+      if(i<9){
         const b=document.querySelector('.btn[data-key="'+t.key+'"]');
         if(b) b.textContent = t.label + '  [' + (i+1) + ']';
       }
@@ -389,7 +624,7 @@ HTML = r"""
   };
   window.pushError = function(err){ status.textContent = '読込失敗: '+err; };
 
-  // --- 録音開始/結果の通知（ボタン・テンキー共通、Python から呼ばれる） ---
+  // --- テンキー(グローバルホットキー)からの通知 ---
   window.hotkeyStart = function(key, label){
     const b = document.querySelector('.btn[data-key="'+key+'"]');
     if(b) b.classList.add('holding');
@@ -406,6 +641,20 @@ HTML = r"""
                         : (res && res.ok ? '送信しました' : '送信できませんでした');
     detail.textContent = (res && res.detail) ? res.detail : '';
   };
+
+  window.actionResult = function(res){
+    status.textContent = (res && res.msg) ? res.msg : '起動できませんでした';
+    detail.textContent = (res && res.detail) ? res.detail : '';
+    bubble.textContent = (res && res.ok) ? '音声会話を開始しました' : '押しながら話してください';
+  };
+
+  function runAction(btn){
+    if(!ready || active) return;
+    status.innerHTML = '<b>'+btn.dataset.label+'</b> を起動中…';
+    detail.textContent = '';
+    bubble.textContent = '…';
+    __vr_actions.push(["click", btn.dataset.key]);
+  }
 
   function press(btn){
     if(!ready || active) return;
@@ -460,6 +709,12 @@ def make_dispatcher(api, get_window):
                 t = TARGETS.get(key)
                 if t is None:
                     continue
+                if t.get("kind") == "click":
+                    # 押すだけの宛先は1回だけ実行する（テンキーは離したときに1回）
+                    if action in ("click", "up"):
+                        res = api.trigger(key)
+                        push_js(f"window.actionResult && actionResult({json.dumps(res)})")
+                    continue
                 if action == "down":
                     api.start(key)
                     push_js(f"window.hotkeyStart && hotkeyStart({json.dumps(key)},"
@@ -493,9 +748,7 @@ def ui_pump(api, window, q):
     画面ボタンの操作は DOM 上のキュー __vr_actions を吸い上げる。"""
     import json
 
-    targets_json = json.dumps(
-        [{"key": t["key"], "label": t["label"], "color": t["color"]}
-         for t in TARGET_LIST])
+    targets_json = json.dumps(api.targets())
     sent_targets = False
     sent_ready = False
     sent_error = None
@@ -503,9 +756,8 @@ def ui_pump(api, window, q):
         time.sleep(0.08)
         try:
             if not sent_targets:
-                ok = window.evaluate_js(
-                    f"window.pushTargets ? pushTargets({targets_json}) : false")
-                if not ok:
+                if not window.evaluate_js(
+                        f"window.pushTargets ? pushTargets({targets_json}) : false"):
                     continue
                 sent_targets = True
             if not sent_ready:
@@ -538,7 +790,9 @@ if __name__ == "__main__":
 
     _window = webview.create_window(
         "Voice Router", html=HTML,
-        width=300, height=300 + 66 * ((len(TARGET_LIST) + 1) // 2),
+        width=300 if len(TARGET_LIST) <= 4 else 340,
+        height=245 + 66 * ((len(TARGET_LIST) + (3 if len(TARGET_LIST) > 4 else 2) - 1)
+                           // (3 if len(TARGET_LIST) > 4 else 2)),
         frameless=True, easy_drag=True,
         on_top=True, background_color="#EAE6E1",
     )

@@ -9,12 +9,19 @@ Windows専用だった Voice Router の macOS 移植です。
 |---|---|---|
 | 送信のしくみ | UI Automation で入力欄を特定し、貼り付きを検証してから Enter | AppleScript でアプリ/タブを前面化し、前面化を検証してから Cmd+V → Enter |
 | 貼り付き検証 | 入力欄の中身を読み返して確認 | 前面アプリの確認のみ（macOSでは入力欄の中身を汎用的に読めないため） |
+| 入力欄フォーカス | UI Automation | ブラウザはページ内JavaScript（許可時のみ・任意） |
 | 対応ブラウザ | Edge / Chrome / Brave / Vivaldi | Chrome / Edge / Brave / Vivaldi / **Safari** |
-| ホットキー | テンキー1〜4（低レベルフック） | テンキー1〜4（pynput / Quartzイベントタップ） |
+| ホットキー | テンキー1〜9（低レベルフック） | テンキー1〜9（pynput / Quartzイベントタップ・別プロセス） |
 | デスクトップアプリの指定 | `"kind": "proc", "proc": "claude.exe"` | `"kind": "app", "app": "Claude"`（アプリ名） |
+| ボタン押下 (`kind:"click"`) | UI Automation でボタンを押す | ブラウザはページ内JS、アプリは System Events |
 
 ChatGPT / Claude / Gemini のWebページはページ全体で貼り付けを受けて
 入力欄に入れるため、タブが前面になっていれば貼り付けは届きます。
+
+音声認識は本家と同じく **Vosk**（話している最中に逐次認識するので、
+離した瞬間に送信される）が既定です。`engine` を `"whisper"` にすると
+faster-whisper に切り替わります。句読点補正（punctuate.py）と
+用語補正（vocab.py）はそのまま動きます。
 
 ## セットアップ
 
@@ -34,9 +41,18 @@ cd ai-voice-router
 1. **マイク** — 録音のため（初回録音時にダイアログが出ます）
 2. **アクセシビリティ** — Cmd+V / Enter のキー入力を送るため（必須）
 3. **オートメーション** — Chrome や System Events の操作。初回にダイアログが出るので「許可」
-4. **入力監視** — テンキー1〜4のグローバルホットキーを使う場合のみ
+4. **入力監視** — テンキー1〜9のグローバルホットキーを使う場合のみ
 
 権限が無い場合でも画面のボタンは使えます（ホットキーだけ無効になります）。
+
+さらに `kind: "click"`（🎙 音声会話 開始／終了）を使う場合は、ブラウザ側で
+**Apple Events からの JavaScript を許可**してください。
+
+- Chrome/Edge/Brave/Vivaldi: 表示 > 開発 / 管理 > 「Apple Events からの JavaScript を許可」
+- Safari: 開発 > 「Apple Events からの JavaScript を許可」
+
+（この設定は音声送信そのものには不要です。有効にすると、貼り付け前に
+入力欄へフォーカスを移せるようになり、アドレスバーへの誤爆も減ります。）
 
 ## 設定 (`voice_router_config.json`)
 

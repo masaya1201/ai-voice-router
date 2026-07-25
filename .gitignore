@@ -7,3 +7,12 @@ dist/
 # 利用者ごとの設定・ログ（配布物には含めない）
 voice_router_config.json
 voice_router.log
+
+# uiautomation が出力するログ
+@AutomationLog.txt
+
+# 作業用の一時キャプチャ
+docs/_*.png
+
+# 専門用語・固有名詞の対応表（個人情報を含むため公開しない）
+vocabulary.json
