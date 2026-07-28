@@ -303,6 +303,79 @@ def focus_composer(composer, timeout=2.0):
         return False
 
 
+# ============================================================
+# 入力欄のクリック（デスクトップアプリ向け）
+# ============================================================
+# Claude.app のような Electron 製アプリは、支援技術を検知するまで
+# アクセシビリティ情報を出さない。前面化しただけでは入力欄にフォーカスが
+# 入らず（実測: フォーカスは AXList にあった）、貼り付けが黙って捨てられる。
+# チャットアプリの入力欄は下端中央にあるので、そこをクリックして確実に
+# フォーカスを入れる。
+DEFAULT_COMPOSER_OFFSET = 70        # ウィンドウ下端から何ピクセル上を狙うか
+
+
+def window_bounds(app):
+    """アプリの最前面ウィンドウの位置と大きさを返す。取れなければ None。"""
+    ok, res, _ = _osascript(f'''
+tell application "System Events" to tell process "{_esc(app)}"
+  set p to position of window 1
+  set s to size of window 1
+  return ((item 1 of p) as text) & "," & ((item 2 of p) as text) & "," & ¬
+         ((item 1 of s) as text) & "," & ((item 2 of s) as text)
+end tell''')
+    if not ok or not res:
+        return None
+    try:
+        x, y, w, h = (int(v) for v in res.split(","))
+        return x, y, w, h
+    except Exception:
+        return None
+
+
+def click_composer(app, offset=DEFAULT_COMPOSER_OFFSET):
+    """入力欄（下端中央）をクリックしてフォーカスを入れる。"""
+    b = window_bounds(app)
+    if b is None:
+        return False
+    x, y, w, h = b
+    cx, cy = x + w // 2, y + h - offset
+    ok, _, _ = _osascript(
+        f'tell application "System Events" to click at {{{cx}, {cy}}}')
+    if ok:
+        time.sleep(0.35)
+    return ok
+
+
+def read_selection_via_clipboard():
+    """いま入力欄にある文字を Cmd+A → Cmd+C で読み戻す。
+    アクセシビリティ情報が取れないアプリでも、貼り付いたかを確認できる。"""
+    before = ""
+    try:
+        before = pyperclip.paste()
+    except Exception:
+        pass
+    _osascript('tell application "System Events" to keystroke "a" using {command down}')
+    time.sleep(0.2)
+    try:
+        pyperclip.copy("")          # 前回の内容を誤って読まないよう空にする
+    except Exception:
+        pass
+    time.sleep(0.1)
+    _osascript('tell application "System Events" to keystroke "c" using {command down}')
+    time.sleep(0.35)
+    try:
+        got = pyperclip.paste()
+    except Exception:
+        got = ""
+    return got or "", before
+
+
+def collapse_selection():
+    """全選択を解除してカーソルを末尾へ（この状態で Enter を押す）。"""
+    _osascript('tell application "System Events" to key code 124')   # →
+    time.sleep(0.12)
+
+
 def read_control_text(composer):
     if composer is None:
         return ""
@@ -501,6 +574,16 @@ def send_text(target, text, press_enter=True, verify=True, prepared=None):
         return SendResult(False, f"✗ {label} を前面にできませんでした",
                           "アクセシビリティ権限を確認してください")
 
+    # --- 3. 入力欄にフォーカスを入れる ---
+    # デスクトップアプリは前面化しただけではフォーカスが入力欄に入らない
+    # （Claude.app の実測ではフォーカスが AXList にあり、貼り付けが黙って
+    # 捨てられていた）。下端中央をクリックして確実にフォーカスを移す。
+    # ブラウザは各AIのページが paste をページ全体で受けて入力欄に入れるため、
+    # 先にクリックすると逆に外してしまう。失敗したときだけクリックする。
+    offset = target.get("composer_offset", DEFAULT_COMPOSER_OFFSET)
+    if not _is_browser(target):
+        click_composer(app, offset)
+
     pyperclip.copy(text)
     time.sleep(0.1)
 
@@ -510,15 +593,44 @@ def send_text(target, text, press_enter=True, verify=True, prepared=None):
                           f"System Events エラー: {err[:80]} — "
                           "システム設定>プライバシーとセキュリティ>アクセシビリティ で"
                           "起動元アプリを許可してください")
+    time.sleep(0.35)
 
-    # --- 3. 送信 ---
+    # --- 4. 本当に入ったかを確認してから Enter を押す ---
+    # 「送ったのに届かない」を防ぐための要。Windows版は UI Automation で
+    # 入力欄を読むが、macOS では読めないアプリが多いのでクリップボード経由で読み戻す。
+    verified = None
+    if verify:
+        needle = text.strip()[:12]
+        got, _before = read_selection_via_clipboard()
+        verified = bool(needle) and needle in got
+        if not verified:
+            # 1度だけ、入力欄をクリックし直して貼り直す
+            click_composer(app, offset)
+            pyperclip.copy(text)
+            time.sleep(0.1)
+            _keystroke_paste()
+            time.sleep(0.4)
+            got, _before = read_selection_via_clipboard()
+            verified = bool(needle) and needle in got
+        if not verified:
+            try:
+                pyperclip.copy(text)      # 手で貼れるよう本文は残しておく
+            except Exception:
+                pass
+            return SendResult(
+                False, f"✗ {label} の入力欄に文字を入れられませんでした",
+                "入力欄をクリックしてから Cmd+V で貼り付けてください"
+                "（本文はコピー済みです）")
+        collapse_selection()              # 全選択を解いてカーソルを末尾へ
+
+    # --- 5. 送信 ---
     if press_enter:
-        time.sleep(0.35)
+        time.sleep(0.12)
         _key(VK_RETURN)
 
     note = "" if focused_win else "（前面化が遅延）"
-    if _is_browser(target) and prep.composer is None:
-        note += "（入力欄未特定）"
+    if verified is None:
+        note += "（未検証）"
     return SendResult(True, f"✓ {label} へ送信{note}")
 
 
