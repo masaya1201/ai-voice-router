@@ -256,23 +256,33 @@ _JS_READ_COMPOSER = """
 """
 
 # 名前でボタンを探して押す。NAMES は JSON 配列に差し替える。
+# Windows版と同じく「完全一致を全名前で探す → 見つからなければ部分一致」の順。
+# 部分一致を先にすると、"音声を終了する" を探しているのに
+# "音声を終了する前に確認" のような別のボタンを押してしまう。
 _JS_CLICK_BUTTON = """
 (function(){
-  var names = NAMES;
+  var names = NAMES.map(function(s){ return s.trim().toLowerCase(); });
   var els = document.querySelectorAll('button,[role="button"],a,[aria-label]');
-  for (var n=0;n<names.length;n++){
-    var want = names[n].toLowerCase();
-    for (var i=0;i<els.length;i++){
-      var e = els[i];
-      var lab = ((e.getAttribute('aria-label')||'') + ' ' +
-                 (e.getAttribute('title')||'') + ' ' +
-                 (e.textContent||'')).toLowerCase();
-      if (lab.indexOf(want) >= 0){
-        var r = e.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0){ e.click(); return 'OK'; }
-      }
+  function labelOf(e){
+    return ((e.getAttribute('aria-label')||'') + ' ' +
+            (e.getAttribute('title')||'') + ' ' +
+            (e.textContent||'')).trim().toLowerCase();
+  }
+  function visible(e){
+    var r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  var exact = [], partial = [];
+  for (var i=0;i<els.length;i++){
+    var e = els[i], lab = labelOf(e);
+    if (!lab || !visible(e)) continue;
+    if (names.indexOf(lab) >= 0) { exact.push(e); continue; }
+    for (var n=0;n<names.length;n++){
+      if (names[n] && lab.indexOf(names[n]) >= 0) { partial.push(e); break; }
     }
   }
+  var hit = exact[0] || partial[0];
+  if (hit) { hit.click(); return 'OK'; }
   return 'NG';
 })()
 """
@@ -461,8 +471,10 @@ def wait_for_composer_text(composer, timeout=12.0, poll=0.4):
 # ============================================================
 
 def _is_browser(target):
-    return target.get("kind") in ("browser_tab", "edge_tab", "click") \
-        and bool(target.get("tab") or target.get("url"))
+    """ブラウザのタブが対象か（旧名 edge_tab も受け付ける）。
+    kind="click" はアプリ内のボタンも押せるので、tab/url があるときだけブラウザ扱い。"""
+    return target.get("kind") in ("browser_tab", "edge_tab") or (
+        target.get("kind") == "click" and bool(target.get("url") or target.get("tab")))
 
 
 def _app_name(target):
@@ -603,8 +615,10 @@ def send_text(target, text, press_enter=True, verify=True, prepared=None):
         needle = text.strip()[:12]
         got, _before = read_selection_via_clipboard()
         verified = bool(needle) and needle in got
-        if not verified:
-            # 1度だけ、入力欄をクリックし直して貼り直す
+        # Windows版と同じく最大3回まで貼り直す（アプリが処理中で取りこぼすため）
+        for _try in range(2):
+            if verified:
+                break
             click_composer(app, offset)
             pyperclip.copy(text)
             time.sleep(0.1)
