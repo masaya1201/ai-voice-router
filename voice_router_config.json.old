@@ -1,0 +1,75 @@
+{
+  "engine": "vosk",
+  "punctuate": true,
+  "vosk_model_name": null,
+  "model_size": "small",
+  "language": "ja",
+  "cpu_threads": 6,
+  "input_device": null,
+  "hotkeys_enabled": true,
+  "hotkey_swallow": true,
+  "targets": [
+    {
+      "key": "claude",
+      "label": "Claude",
+      "color": "#d97757",
+      "kind": "app",
+      "app": "Claude"
+    },
+    {
+      "key": "chatgpt_web",
+      "label": "ChatGPT Web",
+      "color": "#3a8fd6",
+      "kind": "browser_tab",
+      "browser": "chrome",
+      "tab": "chatgpt",
+      "url": "chatgpt.com"
+    },
+    {
+      "key": "gemini",
+      "label": "Gemini",
+      "color": "#8e6fd8",
+      "kind": "browser_tab",
+      "browser": "chrome",
+      "tab": "gemini",
+      "url": "gemini.google.com"
+    },
+    {
+      "key": "claude_web",
+      "label": "Claude Web",
+      "color": "#b8622f",
+      "kind": "browser_tab",
+      "browser": "chrome",
+      "tab": "claude",
+      "url": "claude.ai"
+    },
+    {
+      "key": "gpt_voice",
+      "label": "🎙 音声会話 開始",
+      "color": "#0d8f6f",
+      "kind": "click",
+      "browser": "chrome",
+      "tab": "chatgpt",
+      "url": "chatgpt.com",
+      "button": [
+        "音声を開始する",
+        "Start voice mode",
+        "音声モードを開始"
+      ]
+    },
+    {
+      "key": "gpt_voice_end",
+      "label": "■ 音声会話 終了",
+      "color": "#8a8f98",
+      "kind": "click",
+      "browser": "chrome",
+      "tab": "chatgpt",
+      "url": "chatgpt.com",
+      "button": [
+        "音声を終了する",
+        "End voice mode",
+        "音声モードを終了"
+      ]
+    }
+  ]
+}

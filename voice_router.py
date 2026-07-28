@@ -106,9 +106,12 @@ HOTKEY_SWALLOW = True
 #   {"key":"pplx","label":"Perplexity","color":"#20808d","kind":"edge_tab","tab":"perplexity"},
 # ============================================================
 if IS_MAC:
-    # macOS: デスクトップアプリは kind="app" + app= にアプリ名（.app の名前）。
-    # ブラウザは Edge ではなく Chrome を既定にする。
+    # Windows版と同じ並び・同じキー・同じ色。macOS向けに読み替えたのは2点だけ:
+    #   proc="chatgpt.exe" → kind="app", app="ChatGPT"（.app の名前で指定する）
+    #   browser="edge"     → "chrome"（macOSに Edge は既定で入っていないため）
     _DEFAULT_TARGETS = [
+        {"key": "chatgpt", "label": "ChatGPT", "color": "#10a37f",
+         "kind": "app", "app": "ChatGPT"},
         {"key": "claude", "label": "Claude", "color": "#d97757",
          "kind": "app", "app": "Claude"},
         # タブ名は会話タイトルに変わるため URL でも判定する
@@ -118,10 +121,7 @@ if IS_MAC:
         {"key": "gemini", "label": "Gemini", "color": "#8e6fd8",
          "kind": "browser_tab", "browser": "chrome",
          "tab": "gemini", "url": "gemini.google.com"},
-        {"key": "claude_web", "label": "Claude Web", "color": "#b8622f",
-         "kind": "browser_tab", "browser": "chrome",
-         "tab": "claude", "url": "claude.ai"},
-        # kind="click" は録音せず、ページ内のボタンを押すだけの宛先。
+        # kind="click" は録音せず、アプリ内のボタンを押すだけの宛先。
         # ChatGPTのライブ音声会話を起動する（押した瞬間に会話が始まる）。
         # macOSでは Chrome の「Apple Events からの JavaScript を許可」が必要。
         {"key": "gpt_voice", "label": "🎙 音声会話 開始", "color": "#0d8f6f",
@@ -425,13 +425,14 @@ class Api:
     # 普通に話すと 0.2 以上になる。権限が無いときは完全な 0 が返る。
     SILENT_PEAK = 0.004
 
-    def _no_speech_result(self):
-        """認識結果が空だったときに、原因が分かる形で返す。"""
+    def _no_speech_result(self, msg):
+        """認識できなかったときの結果。表示文はWindows版と同じままにし、
+        原因の切り分け（macOSはマイク権限で無音になる）は detail 側に添える。"""
         if self.peak < self.SILENT_PEAK:
-            return {"ok": False, "msg": "✗ マイクから音が入っていません",
-                    "detail": "システム設定 > プライバシーとセキュリティ > "
-                              "マイク でこのアプリを許可してください"}
-        return {"ok": False, "msg": "（認識なし）",
+            return {"ok": False, "msg": msg,
+                    "detail": "マイクから音が入っていません。システム設定 > "
+                              "プライバシーとセキュリティ > マイク で許可してください"}
+        return {"ok": False, "msg": msg,
                 "detail": f"音は入っています(音量 {self.peak:.2f})。"
                           "もう少しはっきり話すか、話し始める前にボタンを押してください"}
 
@@ -479,7 +480,7 @@ class Api:
                 text = punctuate(text)
             th.join(8.0)
             if not text:
-                return self._no_speech_result()
+                return self._no_speech_result("（認識なし）")
             try:
                 res = sender.send_text(target, text, press_enter=True, verify=True,
                                        prepared=prep_box.get("p"))
@@ -491,7 +492,7 @@ class Api:
                     "msg": res.msg, "detail": res.detail}
 
         if not self.frames:
-            return self._no_speech_result()
+            return self._no_speech_result("（無音）")
         audio = np.concatenate(self.frames, axis=0).flatten()
         if len(audio) < SAMPLE_RATE * 0.3:
             return {"ok": False, "msg": "（短すぎ）"}
@@ -523,7 +524,7 @@ class Api:
         prepared = prep_box.get("p")
 
         if not text:
-            return self._no_speech_result()
+            return self._no_speech_result("（認識なし）")
 
         try:
             res = sender.send_text(target, text, press_enter=True, verify=True,
