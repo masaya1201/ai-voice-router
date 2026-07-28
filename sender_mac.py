@@ -89,18 +89,106 @@ def focus_window(app_name, timeout=2.0):
     return activate_app(app_name, timeout)
 
 
+# ============================================================
+# キー入力・クリックの送出
+# ============================================================
+# osascript(System Events) 経由でキーを送ると、権限が「osascript」という
+# 別プロセスに対して要求される。アプリ側にアクセシビリティを許可しても
+# 「osascriptにはキー操作の送信は許可されません (1002)」で失敗する。
+# そのため Quartz でこのプロセスから直接イベントを送る。こうすれば
+# 権限は Voice Router 自身に紐づき、許可すればそのまま通る。
+
+VK_A = 0
+VK_C = 8
+VK_V = 9
+VK_DELETE = 51
+VK_RIGHT = 124
+
+_CMD = None                     # Quartz のコマンドキー修飾（遅延読み込み）
+
+
+def _quartz():
+    global _CMD
+    try:
+        import Quartz
+        if _CMD is None:
+            _CMD = Quartz.kCGEventFlagMaskCommand
+        return Quartz
+    except Exception:
+        return None
+
+
+def accessibility_trusted(prompt=False):
+    """このプロセスにキー操作の権限があるか。prompt=True なら許可ダイアログを出す。"""
+    try:
+        import HIServices
+        if prompt:
+            return bool(HIServices.AXIsProcessTrustedWithOptions(
+                {HIServices.kAXTrustedCheckOptionPrompt: True}))
+        return bool(HIServices.AXIsProcessTrusted())
+    except Exception:
+        return True             # 判定できないときは止めない
+
+
+def _post_key(vk, command=False):
+    """キーを1回押して離す。"""
+    Q = _quartz()
+    if Q is None:               # Quartz が無い環境では従来どおり osascript
+        if command:
+            return _osascript('tell application "System Events" to keystroke '
+                              f'"{chr(97 + vk) if vk == 0 else "v"}" using {{command down}}')[0]
+        return _osascript(
+            f'tell application "System Events" to key code {int(vk)}')[0]
+    try:
+        src = Q.CGEventSourceCreate(Q.kCGEventSourceStateHIDSystemState)
+        for down in (True, False):
+            ev = Q.CGEventCreateKeyboardEvent(src, int(vk), down)
+            if command:
+                Q.CGEventSetFlags(ev, _CMD)
+            Q.CGEventPost(Q.kCGHIDEventTap, ev)
+            time.sleep(0.01)
+        return True
+    except Exception:
+        return False
+
+
+def _post_click(x, y):
+    """指定座標を1回クリックする。"""
+    Q = _quartz()
+    if Q is None:
+        return _osascript(
+            f'tell application "System Events" to click at {{{x}, {y}}}')[0]
+    try:
+        src = Q.CGEventSourceCreate(Q.kCGEventSourceStateHIDSystemState)
+        pos = Q.CGPointMake(float(x), float(y))
+        Q.CGEventPost(Q.kCGHIDEventTap,
+                      Q.CGEventCreateMouseEvent(src, Q.kCGEventMouseMoved, pos, 0))
+        time.sleep(0.05)
+        for kind in (Q.kCGEventLeftMouseDown, Q.kCGEventLeftMouseUp):
+            Q.CGEventPost(Q.kCGHIDEventTap, Q.CGEventCreateMouseEvent(
+                src, kind, pos, Q.kCGMouseButtonLeft))
+            time.sleep(0.03)
+        return True
+    except Exception:
+        return False
+
+
 def _key(vk, up=False):
-    """キーを1回押す。macOSでは押下と離上を分けられないため up は無視する。"""
+    """キーを1回押す。macOSでは押下と離上を分けないため up は無視する。"""
     if up:
         return True
-    ok, _, _ = _osascript(
-        f'tell application "System Events" to key code {int(vk)}')
-    return ok
+    return _post_key(vk)
 
 
 def _keystroke_paste():
-    return _osascript(
-        'tell application "System Events" to keystroke "v" using {command down}')
+    """Cmd+V。戻り値は _osascript と同じ (ok, stdout, stderr) 形式にそろえる。"""
+    if _post_key(VK_V, command=True):
+        return True, "", ""
+    if not accessibility_trusted():
+        return False, "", ("このアプリにキー操作の権限がありません"
+                           "（システム設定 > プライバシーとセキュリティ > "
+                           "アクセシビリティ で許可してください）")
+    return False, "", "キー操作を送れませんでした"
 
 
 # ============================================================
@@ -349,8 +437,7 @@ def click_composer(app, offset=DEFAULT_COMPOSER_OFFSET):
         return False
     x, y, w, h = b
     cx, cy = x + w // 2, y + h - offset
-    ok, _, _ = _osascript(
-        f'tell application "System Events" to click at {{{cx}, {cy}}}')
+    ok = _post_click(cx, cy)
     if ok:
         time.sleep(0.35)
     return ok
@@ -364,14 +451,14 @@ def read_selection_via_clipboard():
         before = pyperclip.paste()
     except Exception:
         pass
-    _osascript('tell application "System Events" to keystroke "a" using {command down}')
+    _post_key(VK_A, command=True)
     time.sleep(0.2)
     try:
         pyperclip.copy("")          # 前回の内容を誤って読まないよう空にする
     except Exception:
         pass
     time.sleep(0.1)
-    _osascript('tell application "System Events" to keystroke "c" using {command down}')
+    _post_key(VK_C, command=True)
     time.sleep(0.35)
     try:
         got = pyperclip.paste()
@@ -382,7 +469,7 @@ def read_selection_via_clipboard():
 
 def collapse_selection():
     """全選択を解除してカーソルを末尾へ（この状態で Enter を押す）。"""
-    _osascript('tell application "System Events" to key code 124')   # →
+    _post_key(VK_RIGHT)                                              # →
     time.sleep(0.12)
 
 
@@ -684,7 +771,7 @@ def clear_composer(target):
     if prep.error is not None:
         return False
     time.sleep(0.2)
-    _osascript('tell application "System Events" to keystroke "a" using {command down}')
+    _post_key(VK_A, command=True)
     time.sleep(0.1)
-    _osascript('tell application "System Events" to key code 51')  # delete
+    _post_key(VK_DELETE)
     return True

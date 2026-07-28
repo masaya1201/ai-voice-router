@@ -677,6 +677,7 @@ HTML = r"""
     status.textContent = '準備OK — ボタンを押しながら話す';
   };
   window.pushError = function(err){ status.textContent = '読込失敗: '+err; };
+  window.pushNote = function(t){ detail.textContent = t; };
 
   // --- テンキー(グローバルホットキー)からの通知 ---
   window.hotkeyStart = function(key, label){
@@ -815,8 +816,15 @@ def ui_pump(api, window, q):
     sent_targets = False
     sent_ready = False
     sent_error = None
+    warned_ax = False
     if IS_MAC:
         set_dock_icon()     # pywebview 起動後でないとアイコンが戻される
+        # キー操作の権限が無いと「貼り付けできませんでした」になる。
+        # 起動時に一度だけ許可ダイアログを出しておく。
+        try:
+            warned_ax = not sender.accessibility_trusted(prompt=True)
+        except Exception:
+            warned_ax = False
     while True:
         time.sleep(0.08)
         try:
@@ -829,6 +837,11 @@ def ui_pump(api, window, q):
                 if api.ready():
                     window.evaluate_js("window.pushReady && pushReady()")
                     sent_ready = True
+                    if warned_ax:
+                        window.evaluate_js(
+                            "window.pushNote && pushNote("
+                            + json.dumps("アクセシビリティを許可してから起動し直"
+                                         "してください（送信できません）") + ")")
                 else:
                     err = api.error()
                     if err and err != sent_error:
